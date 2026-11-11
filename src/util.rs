@@ -1,6 +1,3 @@
-//! 工具函数：对应 Python `ysp-live-v9.5.py` 中的 now_f64 / log / sha1_upper /
-//! java_string_hashcode / compute_fingerprint / form_encode / 错误分类等。
-
 use std::collections::{HashMap, VecDeque};
 use std::io::Write as _;
 use std::sync::OnceLock;
@@ -27,7 +24,6 @@ pub fn current_time_ms() -> i64 {
     (now_f64() * 1000.0) as i64
 }
 
-/// Python `rust_round`: math.floor(x + 0.5)，与 Rust 的 round (half away from zero) 不同。
 pub fn rust_round(x: f64) -> f64 {
     (x + 0.5).floor()
 }
@@ -63,8 +59,6 @@ pub fn hex_upper(bytes: &[u8]) -> String {
     s
 }
 
-// ---------------------------------------------------------------- 日志
-
 struct LogState {
     ring: VecDeque<String>,
     last_times: HashMap<String, f64>,
@@ -81,7 +75,6 @@ fn log_state() -> &'static Mutex<LogState> {
     })
 }
 
-/// 对应 Python `log(msg, min_interval=0.0)`：同消息按间隔去重 + 120 行环形缓冲。
 pub fn log(msg: impl AsRef<str>, min_interval: f64) {
     let clean = msg.as_ref().trim();
     if clean.is_empty() {
@@ -112,11 +105,10 @@ pub fn log(msg: impl AsRef<str>, min_interval: f64) {
     let _ = out.flush();
 }
 
-/// `/diag` 用：返回最近 30 条日志（去掉 ANSI 颜色码）。
 pub fn recent_logs(n: usize) -> Vec<String> {
     let st = log_state().lock();
     let clean = |s: &str| -> String {
-        // 去掉 \033[...m
+
         let mut out = String::with_capacity(s.len());
         let mut it = s.chars().peekable();
         while let Some(c) = it.next() {
@@ -137,9 +129,6 @@ pub fn recent_logs(n: usize) -> Vec<String> {
     st.ring.iter().rev().take(n).rev().map(|s| clean(s)).collect()
 }
 
-// ---------------------------------------------------------------- 设备指纹
-
-/// Java `String.hashCode()`，32 位有符号溢出。
 pub fn java_string_hashcode(value: &str) -> i32 {
     let mut h: u32 = 0;
     for ch in value.chars() {
@@ -148,19 +137,16 @@ pub fn java_string_hashcode(value: &str) -> i32 {
     h as i32
 }
 
-/// Python `java_uuid_from_hashes`: 两个 32 位 hash 拼成 128 位十六进制（无分隔符）。
 pub fn java_uuid_from_hashes(msb_hash: i32, lsb_hash: i32) -> String {
-    let msb = msb_hash as u64 as u128; // 负数按补码扩展，等价 Python 的 & 0xFFFFFFFFFFFFFFFF
+    let msb = msb_hash as u64 as u128;
     let lsb = lsb_hash as u64 as u128;
     format!("{:032x}", (msb << 64) | lsb)
 }
 
-/// 东八区「当天 0 点」的 Unix 毫秒（Python native_day0_ms，含 UTC+8 偏移）。
 pub fn native_day0_ms(now_s: i64) -> i64 {
     86_400_000 * (now_s + 28_800).div_euclid(86_400) - 28_800_000
 }
 
-/// 返回 (X-Fingerprint, timestamp_ms, day0_ms)。
 pub fn compute_fingerprint(x_uid: &str, now_ms: i64) -> (String, i64, i64) {
     let day0_ms = native_day0_ms(now_ms / 1000);
     let first = sha256_hex(&format!("{AK}{x_uid}{now_ms}{day0_ms}"));
@@ -206,10 +192,6 @@ pub fn resolution_from_screen_param(screen_param: &str) -> String {
     }
 }
 
-// ---------------------------------------------------------------- JSON / 表单
-
-/// 对应 `compact_json_bytes`：sort_keys=True + ensure_ascii=False + 紧凑分隔 + 可选转义 `/`。
-/// serde_json 默认 Map 为 BTreeMap（键有序），且不转义非 ASCII，故只需处理斜杠。
 pub fn compact_json_bytes(value: &Value, escape_forward_slashes: bool) -> Vec<u8> {
     let text = serde_json::to_string(value).unwrap_or_else(|_| "null".to_string());
     if escape_forward_slashes {
@@ -219,7 +201,6 @@ pub fn compact_json_bytes(value: &Value, escape_forward_slashes: bool) -> Vec<u8
     }
 }
 
-/// 对应 `form_urlencode_value`：逐 UTF-8 字节，大写 %XX，空格为 `+`。
 pub fn form_urlencode_value(s: &str) -> String {
     let mut out = String::new();
     for &byte in s.as_bytes() {
@@ -268,7 +249,7 @@ pub fn b64_urlsafe_nopad_encode(data: &[u8]) -> String {
 }
 
 pub fn b64_urlsafe_nopad_decode(s: &str) -> Option<Vec<u8>> {
-    // 对应 Python：先补齐 `=` 再 urlsafe_b64decode。
+
     base64::engine::general_purpose::URL_SAFE_NO_PAD
         .decode(s.as_bytes())
         .ok()
@@ -277,8 +258,6 @@ pub fn b64_urlsafe_nopad_decode(s: &str) -> Option<Vec<u8>> {
             base64::engine::general_purpose::URL_SAFE.decode(padded.as_bytes()).ok()
         })
 }
-
-// ---------------------------------------------------------------- 错误分类
 
 fn has_http_400(lower: &str) -> bool {
     lower.contains("http 400") || lower.contains("status=400")
@@ -330,9 +309,6 @@ pub fn is_identity_recoverable_error(message: &str) -> bool {
             .any(|n| lower.contains(n))
 }
 
-// ---------------------------------------------------------------- 其他
-
-/// 对应 `parse_result_code`：按固定键序从 JSON 里递归找整型返回码。
 pub fn parse_result_code(value: &Value) -> Option<i64> {
     let obj = value.as_object()?;
     for key in ["result", "code", "errCode", "errcode", "ret"] {
@@ -394,7 +370,7 @@ mod tests {
 
     #[test]
     fn java_hashcode_matches_python() {
-        // Python: java_string_hashcode("abc") == 96354
+
         assert_eq!(java_string_hashcode("abc"), 96354);
         assert_eq!(java_string_hashcode(""), 0);
     }
@@ -404,7 +380,7 @@ mod tests {
         let (fp, ts, day0) = compute_fingerprint("ABC", 1_700_000_000_000);
         assert_eq!(fp.len(), 64);
         assert_eq!(ts, 1_700_000_000_000);
-        // Python: day0 = 86400000*((now_s+28800)//86400) - 28800000（UTC+8 对齐日界）
+
         assert_eq!(day0 % 86_400_000, 57_600_000);
     }
 

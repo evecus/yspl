@@ -1,8 +1,3 @@
-//! 对应 Python `DeviceProfile` / `DeviceState` / `DEVICE_PROFILE_POOL` /
-//! `load_device_state` / `save_device_state` / `create_and_save_new_device` /
-//! `compute_x_uid` / `infer_os_version` / `infer_sdk_int`。
-//! 持久化格式与 `device-state-rs.json` 完全兼容（sort_keys + indent=2 + 原子替换）。
-
 use std::fs;
 use std::path::Path;
 
@@ -43,12 +38,12 @@ fn str_field(v: &Value, key: &str) -> String {
     match v.get(key) {
         None | Some(Value::Null) => String::new(),
         Some(Value::String(s)) => s.clone(),
-        Some(other) => other.to_string(), // Python: str(d.get(name, ''))
+        Some(other) => other.to_string(),
     }
 }
 
 impl DeviceProfile {
-    /// 对应 `DeviceProfile.from_dict`：逐字段 str() 容错。
+
     pub fn from_value(v: &Value) -> Self {
         Self {
             android_id: str_field(v, "android_id"),
@@ -87,7 +82,6 @@ pub struct DeviceState {
     pub updated_at: f64,
 }
 
-/// Python `random_device_template()`: 优先 source 含 "8k" 的模板池。
 pub fn random_device_template() -> &'static DeviceTemplate {
     let pool8k: Vec<&'static DeviceTemplate> = DEVICE_PROFILE_POOL
         .iter()
@@ -131,14 +125,13 @@ pub fn device_profile_from_template(t: &DeviceTemplate, android_id: &str, mac: &
     }
 }
 
-/// Python `compute_x_uid(profile)`。
 pub fn compute_x_uid(p: &DeviceProfile) -> String {
     let build_identity_str = format!(
         "1698{}{}{}{}{}{}{}{}{}{}{}{}",
         p.hardware, p.board, p.brand, p.device, p.manufacturer, p.model,
         p.product, p.tags, p.build_type, p.user, p.resolution, p.mac
     );
-    // 字段顺序与 Python 一致：12 项，前缀 "1698"
+
     let uuid_part = java_uuid_from_hashes(
         java_string_hashcode(&build_identity_str),
         java_string_hashcode(&p.model),
@@ -191,7 +184,6 @@ pub fn create_and_save_new_device(path: &Path) -> DeviceState {
     state
 }
 
-/// 对应 `binary_dir()`：默认数据目录为可执行文件所在目录。
 pub fn binary_dir() -> std::path::PathBuf {
     std::env::current_exe()
         .ok()
@@ -200,13 +192,13 @@ pub fn binary_dir() -> std::path::PathBuf {
 }
 
 pub(crate) fn json_sorted_pretty<T: Serialize>(v: &T) -> String {
-    // Python: json.dumps(..., indent=2, ensure_ascii=False, sort_keys=True)
+
     let value = serde_json::to_value(v).unwrap_or(Value::Null);
     serde_json::to_string_pretty(&value).unwrap_or_default()
 }
 
 pub(crate) fn atomic_write(path: &Path, content: &str) -> std::io::Result<()> {
-    // Python 的临时文件名是 `path + ".tmp.<pid>"`（不是替换扩展名）
+
     let tmp = std::path::PathBuf::from(format!("{}.tmp.{}", path.display(), std::process::id()));
     if let Some(parent) = path.parent() {
         if !parent.as_os_str().is_empty() {
@@ -235,7 +227,6 @@ pub fn save_device_state(path: &Path, state: &DeviceState) -> std::io::Result<()
     atomic_write(path, &content)
 }
 
-/// 返回 (state, existed)。任何解析/校验失败都回退到新设备且 existed=false。
 pub fn load_device_state(path: &Path) -> (DeviceState, bool) {
     let text = match fs::read_to_string(path) {
         Ok(t) => t,
@@ -306,7 +297,7 @@ mod tests {
         let state = default_device_state();
         save_device_state(&path, &state).unwrap();
         let raw = fs::read_to_string(&path).unwrap();
-        // Python sort_keys=True：顶层键按字母序，cast_model 最先
+
         assert!(raw.starts_with("{\n  \"cast_model\""), "got: {raw}");
         let (loaded, existed) = load_device_state(&path);
         assert!(existed);

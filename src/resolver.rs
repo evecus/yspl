@@ -1,7 +1,3 @@
-//! 对应 Python `class Resolver` 的状态机部分：会话池、换台防抖、配额、冷却、
-//! 400 换设备、后台刷新队列、SWR、playlist 缓存、TS 回放头匹配。
-//! 设备协议的具体 HTTP 流程见 `protocol.rs`，HLS 文本处理见 `hls.rs`。
-
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -29,7 +25,6 @@ pub struct Resolver {
     refresh_rx: Mutex<Option<mpsc::UnboundedReceiver<String>>>,
 }
 
-/// `control_request_slot` 的 RAII 守卫：离开作用域时写入 last_control_request_at。
 pub struct ControlGuard {
     state: Arc<Mutex<ResolverState>>,
 }
@@ -56,8 +51,6 @@ impl Resolver {
         }))
     }
 
-    // ------------------------------------------------------------ 启动后台任务
-
     pub fn start_background(self: &Arc<Self>) {
         let r = self.clone();
         tokio::spawn(async move {
@@ -79,7 +72,6 @@ impl Resolver {
         tokio::spawn(async move { r.init_resolver().await });
     }
 
-    /// 对应 `init_resolver()`：后台初始化设备协议并发池，失败按指数退避重试。
     async fn init_resolver(self: Arc<Self>) {
         log("[系统] 正在初始化设备协议并发池…", 0.0);
         let mut retry = 0i64;
@@ -113,9 +105,6 @@ impl Resolver {
         }
     }
 
-    // ------------------------------------------------------------ 控制面节流
-
-    /// 对应 `control_request_slot(label)`：最小间隔 + 可选抖动。
     pub async fn control_slot(&self, _label: &str) -> ControlGuard {
         let min_interval = self.args.refresh_interval.max(0.0);
         loop {
@@ -147,8 +136,6 @@ impl Resolver {
         Some((min_ms + extra as i64) as f64 / 1000.0)
     }
 
-    // ------------------------------------------------------------ 会话辅助
-
     pub fn session_fresh(&self, created_at: f64) -> bool {
         self.args.session_ttl <= 0.0 || now_f64() - created_at < self.args.session_ttl
     }
@@ -171,7 +158,6 @@ impl Resolver {
         p.with_file_name(format!("{stem}-slot{slot}.{ext}"))
     }
 
-    /// 对应 `evict_idle_links`：释放空闲超过 idle_sec 的高码率配额。
     pub fn evict_idle_links(&self, sess: &SharedSession, idle_sec: f64) {
         let last = { self.state.lock().channel_last_access.clone() };
         let now = now_f64();
@@ -180,9 +166,6 @@ impl Resolver {
             .retain(|ch| now - last.get(ch).copied().unwrap_or(0.0) <= idle_sec);
     }
 
-    // ------------------------------------------------------------ 换台防抖
-
-    /// 对应 `zap_debounced(channel)`：非 4K 频道切台后先出 1080p，停留超过防抖秒数再升码率。
     pub fn zap_debounced(self: &Arc<Self>, channel: &str) -> bool {
         if crate::channels::is_true_4k(channel) {
             return false;
@@ -243,7 +226,6 @@ impl Resolver {
         result
     }
 
-    /// 对应 `acquire_prefetch_preemption`：换台时中断其他频道的后台预取。
     fn acquire_prefetch_preemption(&self, channel: &str) -> Arc<AtomicBool> {
         let mut map = self.app.prefetch_events.lock();
         for (ch, flag) in map.iter() {
@@ -308,9 +290,6 @@ impl Resolver {
         }
     }
 
-    // ------------------------------------------------------------ 400 换设备
-
-    /// 对应 `rotate_device_on_400`：5 分钟内一次、每天最多 5 次。
     pub fn rotate_device_on_400(&self, reason: &str) -> bool {
         let now = now_f64();
         let (wipe_no, target) = {
@@ -344,8 +323,6 @@ impl Resolver {
         ), 0.0);
         true
     }
-
-    // ------------------------------------------------------------ 错误 / 冷却
 
     pub fn record_recoverable_error(&self, reason: &str) -> bool {
         if !crate::util::is_identity_recoverable_error(reason) {
@@ -398,9 +375,6 @@ impl Resolver {
         self.state.lock().channel_failures.remove(channel);
     }
 
-    // ------------------------------------------------------------ 后台刷新队列
-
-    /// 对应 `enqueue_background_refresh`，返回 (status, reason)。
     pub fn enqueue_background_refresh(&self, channel: &str) -> (String, String) {
         let now = now_f64();
         let mut st = self.state.lock();
@@ -428,7 +402,6 @@ impl Resolver {
         ("enqueued".to_string(), String::new())
     }
 
-    /// 对应 `refresh_channel_background`。
     pub async fn refresh_channel_background(&self, channel: &str) -> bool {
         let ok = {
             let _guard = self.control.lock().await;
@@ -481,9 +454,6 @@ impl Resolver {
         ok
     }
 
-    // ------------------------------------------------------------ 主入口 ensure_channel
-
-    /// 对应 `Resolver.ensure_channel(channel, force=False)`（SWR + 冷却 + 400 自愈）。
     pub async fn ensure_channel(&self, channel: &str, force: bool) -> Result<ChannelEntry> {
         let now = now_f64();
         if !force {
@@ -588,9 +558,6 @@ impl Resolver {
         }
     }
 
-    // ------------------------------------------------------------ playlist 缓存
-
-    /// 对应 `inspect_playlist_cache`。
     pub fn inspect_playlist_cache(
         cached: Option<&PlaylistCacheEntry>,
         entry: &ChannelEntry,
@@ -620,7 +587,6 @@ impl Resolver {
         PlaylistCacheProbe { state: format!("miss:{}", reasons.join("+")), age_ms }
     }
 
-    /// 对应 `playback_headers_for_ts_url`：按 host / 路径前缀找已缓存的签名回放头。
     pub fn playback_headers_for_ts_url(&self, real_url: &str) -> Result<HashMap<String, String>> {
         let parsed = url::Url::parse(real_url)
             .map_err(|e| YsptpError::new(format!("invalid proxy ts URL: {e}")))?;
@@ -662,7 +628,6 @@ impl Resolver {
         Ok(default_cctv_playback_headers(&self.current_cctv_android_id()))
     }
 
-    /// 对应 `current_cctv_android_id(resolver)`。
     pub fn current_cctv_android_id(&self) -> String {
         let (loaded, _) = crate::device::load_device_state(&self.args.device_json);
         if !loaded.profile.android_id.is_empty() {
@@ -683,7 +648,6 @@ impl Resolver {
         String::new()
     }
 
-    /// 对应 `proxy_playlist_ts_urls`：把 playlist 里的 .ts 行改成 /proxy.ts?base64 链。
     pub fn proxy_playlist_ts_urls(
         playlist: &str,
         proxy_origin: &str,
@@ -692,7 +656,6 @@ impl Resolver {
         crate::hls::proxy_playlist_ts_urls(playlist, proxy_origin, proxy_prefix)
     }
 
-    /// 对应 `fetch_playlist`：playlist 缓存命中/失效探测 + 单飞锁 + SWR 回退。
     pub async fn fetch_playlist(
         &self,
         entry: &ChannelEntry,
@@ -775,13 +738,12 @@ impl Resolver {
         Ok((body, content_type, miss_probe))
     }
 
-    /// 对应 `fetch_channel_playlist`：换台防抖 + 地址过期极速重取。
     pub async fn fetch_channel_playlist(&self, channel: &str, host_header: &str, proto: &str) -> Result<Option<String>> {
         {
             let mut st = self.state.lock();
             st.channel_last_access.insert(channel.to_string(), now_f64());
         }
-        // zap_debounced 需要 Arc<Self>，这里用已注册的全局 resolver
+
         let r = self.app.resolver.read().clone();
         if let Some(r) = r {
             if r.zap_debounced(channel) {
@@ -824,18 +786,15 @@ impl Resolver {
         unreachable!()
     }
 
-    /// 对应 `status_json` 用到的 resolver 快照（详见 meta.rs）。
     pub fn snapshot_state(&self) -> HashMap<String, ChannelEntry> {
         self.state.lock().cache.clone()
     }
 
-    /// 对应 `write_meta` 中读取 cache_detail 的方法。
     pub fn cache_detail(&self) -> HashMap<String, ChannelEntry> {
         self.snapshot_state()
     }
 }
 
-/// 供 meta.rs 组装诊断信息：设备协议是否已注册。
 pub fn session_summary(r: &Resolver) -> Option<(i64, String, i64, String)> {
     let st = r.state.lock();
     let s = st.sessions.get(&0)?.clone();

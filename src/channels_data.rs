@@ -1,7 +1,3 @@
-// @generated 由 gen_data.py 从 ysp-live-v9.5.py 机械抽取，请勿手工编辑。
-// 频道定义 / 别名 / EPG / 分组 / 高码率与回看集合，与 Python 版逐项一致。
-
-/// (slug, name, sid, pid, defn)
 pub static DEFAULT_CHANNELS: &[(&str, &str, &str, &str, &str)] = &[
     ("cctv1", "CCTV-1 综合", "2024078201", "600001859", "fhd"),
     ("cctv2", "CCTV-2 财经", "2024075401", "600001800", "fhd"),
@@ -69,7 +65,6 @@ pub static DEFAULT_CHANNELS: &[(&str, &str, &str, &str, &str)] = &[
     ("guoxue", "国学频道", "2029360403", "600213139", "fhd"),
 ];
 
-/// 设备协议 live/v1/01 使用的 live_id（26 路高码率频道）
 pub static BACKEND_LIVE_IDS: &[(&str, &str)] = &[
     ("cctv1", "Live1717729995180256"),
     ("cctv2", "Live1718261577870260"),
@@ -99,7 +94,6 @@ pub static BACKEND_LIVE_IDS: &[(&str, &str)] = &[
     ("cgtndoc", "Live1719392360336281"),
 ];
 
-/// 频道别名 -> 规范 slug
 pub static ALIAS_MAP: &[(&str, &str)] = &[
     ("anhuiws", "ahws"),
     ("beijingws", "bjws"),
@@ -140,7 +134,6 @@ pub static ALIAS_MAP: &[(&str, &str)] = &[
     ("zhejiangws", "zjws"),
 ];
 
-/// EPG tvg-id
 pub static TVG_IDS: &[(&str, &str)] = &[
     ("ahws", "安徽卫视"),
     ("bjws", "北京卫视"),
@@ -208,7 +201,6 @@ pub static TVG_IDS: &[(&str, &str)] = &[
     ("zjws", "浙江卫视"),
 ];
 
-/// 走设备协议（高码率）的频道
 pub static BACKEND_CHANNELS: &[&str] = &[
     "cctv1",
     "cctv10",
@@ -238,14 +230,12 @@ pub static BACKEND_CHANNELS: &[&str] = &[
     "cgtnru",
 ];
 
-/// 真 4K/8K 频道
 pub static TRUE_4K_CHANNELS: &[&str] = &[
     "cctv164k",
     "cctv4k",
     "cctv8k",
 ];
 
-/// 支持 7 天时移回看的频道
 pub static TIMESHIFT_SUPPORTED: &[&str] = &[
     "ahws",
     "bjws",
@@ -302,7 +292,6 @@ pub static TIMESHIFT_SUPPORTED: &[&str] = &[
     "zjws",
 ];
 
-/// 强制走 bkliveinfo 备用通道的频道
 pub static FORCE_BK: &[&str] = &[
     "cctv11",
     "cctv12",
@@ -315,7 +304,6 @@ pub static FORCE_BK: &[&str] = &[
     "cctvhjjc",
 ];
 
-/// engine_proxy 允许的域名后缀
 pub static ALLOWED_ENGINE_PROXY_SUFFIXES: &[&str] = &[
     ".alicdn.com",
     ".alikunlun.com",

@@ -1,7 +1,3 @@
-//! 对应 Python 的全部可变状态：`ResolverState` / `AppSession` / `ChannelEntry` /
-//! `PlaylistCacheEntry` / `RefreshQueue` / `HttpQueue` / `TsSegmentCache` /
-//! `Channel` / `ChannelDirectory` / 高码率独占锁 / 全局 `resolver` 与 `active_backend_channels`。
-
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -15,48 +11,44 @@ use crate::device::DeviceProfile;
 use crate::http_client::HttpClient;
 use crate::identity::Identity;
 
-// ---------------------------------------------------------------- 配置
-
-/// 对应 Python `argparse.ArgumentParser` 的全部 CLI 参数（含环境变量）。
 #[derive(Clone, Debug, clap::Parser)]
-#[command(name = "ysp-live", version, about = "央视频全频道直播代理（ysp-live v9.5.1）")]
+#[command(name = "yspl", version, about = "央视频全频道直播代理（yspl v0.1.0）")]
 pub struct Cli {
-    /// 监听端口 (默认 8767)
+
     #[arg(default_value_t = 8767)]
     pub port: u16,
-    /// 监听地址 (默认 0.0.0.0)
+
     #[arg(long, default_value = "0.0.0.0")]
     pub bind: String,
-    /// 数据持久化目录 (默认由 YSP_DATA_DIR 环境变量或可执行文件所在目录决定)
+
     #[arg(long, env = "YSP_DATA_DIR", default_value = "")]
     pub data_dir: String,
-    /// TS 分片内存缓存大小 (MB, 默认 200)
+
     #[arg(long, default_value_t = 200)]
     pub cache_mb: i64,
-    /// 不启动设备协议 (仅走 1080p JCE/bkliveinfo)
+
     #[arg(long)]
     pub no_4k: bool,
-    /// 仅 4K/8K 频道走设备协议
+
     #[arg(long)]
     pub only_4k: bool,
-    /// 单设备高码率链接配额上限
+
     #[arg(long, env = "YSP_LINKS_PER_DEVICE", default_value_t = 6)]
     pub links_per_device: usize,
-    /// 换台防抖秒数
+
     #[arg(long, env = "YSP_ZAP_DEBOUNCE", default_value_t = 10.0)]
     pub zap_debounce: f64,
-    /// Web WASM 引擎端口 (默认 8787)
+
     #[arg(long, default_value_t = 8787)]
     pub engine_port: u16,
-    /// 设备协议 HTTP 超时秒数
+
     #[arg(long, default_value_t = 10.0)]
     pub timeout: f64,
-    /// 不启动 Web WASM 伴生引擎
+
     #[arg(long)]
     pub no_engine: bool,
 }
 
-/// 对应 `main()` 里构造的 `engine_args`（固定值，1:1）。
 #[derive(Clone, Debug)]
 pub struct EngineArgs {
     pub host: String,
@@ -113,8 +105,6 @@ impl EngineArgs {
         }
     }
 }
-
-// ---------------------------------------------------------------- 数据结构
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(default)]
@@ -210,7 +200,6 @@ pub struct VdnGetStreamResult {
     pub app_random_str: String,
 }
 
-/// 对应 `AppSession` dataclass。共享可变字段用 Mutex 包裹。
 pub struct AppSession {
     pub profile: DeviceProfile,
     pub identity: Identity,
@@ -230,8 +219,6 @@ pub struct AppSession {
 }
 
 pub type SharedSession = Arc<Mutex<AppSession>>;
-
-// ---------------------------------------------------------------- ResolverState
 
 #[derive(Default)]
 pub struct RefreshQueueStats {
@@ -320,8 +307,6 @@ impl Default for ResolverState {
     }
 }
 
-// ---------------------------------------------------------------- TS 分片缓存
-
 struct TsItem {
     data: Vec<u8>,
     headers: Vec<(String, String)>,
@@ -332,7 +317,6 @@ pub struct TsSegmentCache {
     inner: Mutex<TsInner>,
 }
 
-/// TS 缓存命中返回的数据 + 原始响应头。
 pub type CachedResponse = (Vec<u8>, Vec<(String, String)>);
 
 struct TsInner {
@@ -424,22 +408,20 @@ impl TsSegmentCache {
     }
 }
 
-// ---------------------------------------------------------------- 1080p 备用流 Channel
-
 pub struct Channel {
     pub slug: String,
     pub name: String,
     pub sid: String,
     pub pid: String,
     pub defn: String,
-    pub segments: HashMap<String, (i64, f64, String, String)>, // key -> (seq, dur, pdt, url)
+    pub segments: HashMap<String, (i64, f64, String, String)>,
     pub order: VecDeque<String>,
     pub seen_keys: VecDeque<String>,
     pub seq: i64,
     pub last_access: f64,
     pub last_error: String,
     pub last_ok: f64,
-    pub mode: String, // "jce" | "bk"
+    pub mode: String,
     pub last_pdt: String,
     pub bk_urls: Vec<String>,
     pub bk_urls_time: f64,
@@ -469,8 +451,6 @@ impl Channel {
 
 pub type SharedChannel = Arc<Mutex<Channel>>;
 
-// ---------------------------------------------------------------- 高码率独占锁
-
 pub struct HighLocks {
     inner: Mutex<HashMap<String, (String, f64)>>,
     start: Instant,
@@ -492,7 +472,6 @@ impl HighLocks {
         }
     }
 
-    /// 对应 `check_and_update_high_lock`。
     pub fn check_and_update(&self, channel: &str, client_ip: &str) -> bool {
         let channel = crate::util::normalize_channel(channel);
         let client_ip = client_ip.trim();
@@ -521,8 +500,6 @@ impl HighLocks {
     }
 }
 
-// ---------------------------------------------------------------- 全局 AppState
-
 pub struct AppState {
     pub cli: crate::Cli,
     pub args: EngineArgs,
@@ -536,9 +513,9 @@ pub struct AppState {
     pub engine_port: u16,
     pub active_backend: HashSet<String>,
     pub resolver: RwLock<Option<Arc<crate::resolver::Resolver>>>,
-    /// 对应 `_inflight_refresh`：按频道合并后台刷新请求。
+
     pub inflight_events: Mutex<HashMap<String, Arc<tokio::sync::Notify>>>,
-    /// 对应 `_active_prefetch_events`：换台插队抢占（Event.set 语义）。
+
     pub prefetch_events: Mutex<HashMap<String, Arc<AtomicBool>>>,
     pub flow_limiter: crate::hls::ApiFlowLimiter,
     pub engine_proxy_suffixes: Vec<&'static str>,
@@ -618,7 +595,7 @@ mod tests {
         let c = TsSegmentCache::new(1, 60.0);
         c.set("a", vec![0u8; 600_000], vec![]);
         c.set("b", vec![0u8; 600_000], vec![]);
-        assert!(c.get("a").is_none()); // 被淘汰
+        assert!(c.get("a").is_none());
         assert!(c.get("b").is_some());
         let s = c.stats();
         assert_eq!(s["count"].as_i64().unwrap(), 1);

@@ -2342,8 +2342,8 @@ dependencies = [
 ]
 
 [[package]]
-name = "ysp-live"
-version = "9.5.1"
+name = "yspl"
+version = "0.1.0"
 dependencies = [
  "aes-gcm",
  "axum",

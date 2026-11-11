@@ -1,7 +1,3 @@
-//! 对应 Python `status_json()` / `write_meta()` / `load_cache()`。
-//! 持久化文件名与字段保持兼容：`proxy-cache-state-rs.json`、
-//! `device-state-rs.json`，均为 sort_keys + indent=2 + 原子替换。
-
 use std::collections::HashMap;
 use std::path::Path;
 
@@ -13,7 +9,6 @@ use crate::resolver::Resolver;
 use crate::state::ChannelEntry;
 use crate::util::{now_f64, rust_round};
 
-/// 对应 `load_cache(path)`：读取 `cache_detail` 恢复频道缓存。
 pub fn load_cache(path: &Path) -> HashMap<String, ChannelEntry> {
     let text = match std::fs::read_to_string(path) {
         Ok(t) => t,
@@ -216,7 +211,6 @@ pub fn status_json(r: &Resolver) -> Value {
     })
 }
 
-/// 对应 `write_meta()`：写 proxy-cache-state-rs.json（含 cache_detail 与两条说明）。
 pub fn write_meta(r: &Resolver) -> std::io::Result<()> {
     let mut payload = status_json(r);
     let detail: serde_json::Map<String, Value> = r.cache_detail()

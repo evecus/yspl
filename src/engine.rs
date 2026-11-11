@@ -1,7 +1,3 @@
-//! 对应 Python `start_companion_engine` / `stop_companion_engine` /
-//! `is_port_listening` / `atexit` / SIGTERM 处理。
-//! 按「全量 1:1」要求保留 Node.js 伴生引擎（ysp-engine.js 原样随镜像分发）。
-
 use std::net::{SocketAddr, TcpStream};
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
@@ -36,7 +32,6 @@ fn find_engine_file() -> Option<PathBuf> {
     candidates.into_iter().find(|p| p.is_file())
 }
 
-/// 对应 `start_companion_engine(script_dir, port=8787)`，返回子进程句柄。
 pub fn start_companion_engine(app: &AppState) -> Option<Child> {
     let port = app.engine_port;
     if is_port_listening(port) {
@@ -76,7 +71,6 @@ pub fn start_companion_engine(app: &AppState) -> Option<Child> {
     }
 }
 
-/// 对应 `stop_companion_engine`。
 pub fn stop_companion_engine(child: &mut Option<Child>) {
     let Some(mut p) = child.take() else { return };
     if let Ok(None) = p.try_wait() {
@@ -86,7 +80,6 @@ pub fn stop_companion_engine(child: &mut Option<Child>) {
     }
 }
 
-/// 检查 engine_proxy 的目标是否是本地伴生引擎的合法 URL（见 hls.rs）。
 pub fn engine_file_exists() -> bool {
     find_engine_file().is_some()
 }

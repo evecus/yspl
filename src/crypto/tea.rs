@@ -1,15 +1,11 @@
-//! 对应 Python `_tea_blk` / `_cksum` / `_tea_pkt` / `_lp` / `_ck_guard` / `_ckey`
-//! / `generate_app_random_str` / `compute_vdn_code`（腾讯 cKey 与 VDN 签名）。
-
 use rand::RngCore as _;
 use serde_json::{json, Value};
 
 use crate::constants::{AK, CK_APPVER, CK_GTEA, CK_GXOR, CK_PLATFORM, CK_TEA, CK_XOR};
 use crate::util::{hex_upper, md5_hex};
 
-const DELTA: u32 = 2_654_435_769; // 0x9E3779B9
+const DELTA: u32 = 2_654_435_769;
 
-/// 标准 TEA 单块加密（16 轮），大端 u32。
 fn tea_blk(blk: &[u8; 8], key: &[u8; 16]) -> [u8; 8] {
     let mut y = u32::from_be_bytes([blk[0], blk[1], blk[2], blk[3]]);
     let mut z = u32::from_be_bytes([blk[4], blk[5], blk[6], blk[7]]);
@@ -39,7 +35,6 @@ fn tea_blk(blk: &[u8; 8], key: &[u8; 16]) -> [u8; 8] {
     out
 }
 
-/// Python `_cksum`: `v = (131*v + b) & 0x7FFFFFFF`。
 fn cksum(buf: &[u8]) -> u32 {
     let mut v: u32 = 0;
     for &b in buf {
@@ -48,7 +43,6 @@ fn cksum(buf: &[u8]) -> u32 {
     v
 }
 
-/// Python `_tea_pkt`：随机填充 + CBC 链式 TEA，返回密文。
 fn tea_pkt(data: &[u8], key: &[u8; 16]) -> Vec<u8> {
     let pad = (8 - (data.len() + 10) % 8) % 8;
     let mut plain = Vec::with_capacity(1 + pad + 2 + data.len() + 7);
@@ -86,7 +80,6 @@ fn tea_pkt(data: &[u8], key: &[u8; 16]) -> Vec<u8> {
     out
 }
 
-/// Python `_lp`: 2 字节大端长度前缀。
 fn lp(s: &[u8]) -> Vec<u8> {
     let mut out = Vec::with_capacity(2 + s.len());
     out.extend_from_slice(&(s.len() as u16).to_be_bytes());
@@ -100,7 +93,6 @@ fn tail(v: &str) -> &[u8] {
     &bytes[start..]
 }
 
-/// Python `_ck_guard(ts, guid)` -> 大写 hex 字符串。
 fn ck_guard(ts: u32, guid: &str) -> String {
     let mut body = Vec::new();
     body.extend_from_slice(&ts.to_be_bytes());
@@ -117,7 +109,6 @@ fn ck_guard(ts: u32, guid: &str) -> String {
     hex_upper(&enc)
 }
 
-/// Python `_ckey(channel_id)`。返回 {cKey, guid, ts, flowId}。
 pub fn ckey(channel_id: &str) -> Value {
     let ts = crate::util::now_f64() as u32;
     let mut guid_raw = [0u8; 16];
@@ -154,7 +145,7 @@ pub fn ckey(channel_id: &str) -> Value {
     let mut pkt = Vec::with_capacity(2 + body.len());
     pkt.extend_from_slice(&(body.len() as u16).to_be_bytes());
     pkt.extend_from_slice(&body);
-    // Python: pkt[18:22] = pack('>I', _cksum(bytes(pkt)))
+
     let sum = cksum(&pkt);
     pkt[18..22].copy_from_slice(&sum.to_be_bytes());
 
@@ -189,7 +180,6 @@ fn hex_lower_bytes(bytes: &[u8]) -> String {
     s
 }
 
-/// Python `generate_app_random_str`。
 pub fn generate_app_random_str() -> String {
     let mut rng = rand::rngs::OsRng;
     let a = rng.next_u32();
@@ -198,7 +188,6 @@ pub fn generate_app_random_str() -> String {
     format!("{a:08x}-0000-{b:04x}-0000-00000000{c:04x}")
 }
 
-/// Python `compute_vdn_code(app_secret, random_str=None)` -> (app_sign, random_str)。
 pub fn compute_vdn_code(app_secret: &str, random_str: Option<String>) -> (String, String) {
     let r = random_str.unwrap_or_else(generate_app_random_str);
     (md5_hex(&format!("{AK}{app_secret}{r}")), r)
@@ -210,9 +199,9 @@ mod tests {
 
     #[test]
     fn tea_blk_known_vector() {
-        // 标准 TEA：全零密钥/明文，16 轮后的已知结果
+
         let out = tea_blk(&[0u8; 8], &[0u8; 16]);
-        // 仅做结构校验（非零且长度 8），具体向量在 golden 对拍中验证
+
         assert_eq!(out.len(), 8);
         assert_ne!(out, [0u8; 8]);
     }

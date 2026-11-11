@@ -1,8 +1,3 @@
-//! 对应 Python `Resolver` 里所有设备协议 HTTP 流程：
-//! bootstrap_session / app_start_flow / cloud_registration_flow / device_info_report_flow /
-//! heartbeat_flow / index_flow / warmup_flow / live_v1_01_flow / live_v1_02_flow /
-//! vdn_getstream_flow / resolve_channel_once / refresh_channel_controlled / send_heartbeat。
-
 use std::path::Path;
 use std::time::Duration;
 
@@ -36,8 +31,6 @@ fn set_header(h: &mut Headers, key: &str, value: &str) {
 fn body_json(resp: &crate::http_client::HttpResponse) -> (u16, String, Option<Value>) {
     response_json(resp)
 }
-
-// ---------------------------------------------------------------- 遥测 / 辅助流程
 
 pub async fn collect_report_async(r: &Resolver, profile: &DeviceProfile, body: &Value) -> Result<()> {
     let headers = build_collect_headers(profile);
@@ -141,7 +134,6 @@ pub async fn device_info_report_flow(
     Ok(())
 }
 
-/// 对应 `heartbeat_flow`，返回上报返回码字符串。
 pub async fn heartbeat_flow(
     r: &Resolver,
     profile: &DeviceProfile,
@@ -173,9 +165,6 @@ pub async fn heartbeat_flow(
         .unwrap_or_default())
 }
 
-// ---------------------------------------------------------------- appStart / 云注册
-
-/// 对应 `app_start_flow`：两次重试，用 X-Fingerprint 前 32 字符解出 session_key。
 pub async fn app_start_flow(
     r: &Resolver,
     client: &HttpClient,
@@ -226,7 +215,6 @@ pub async fn app_start_flow(
     Err(YsptpError::new(last))
 }
 
-/// 对应 `cloud_registration_flow`：get -> 按需 register -> 再 get。
 pub async fn cloud_registration_flow(r: &Resolver, identity: &Identity, cloud_device_id: &str) -> Result<String> {
     let body = json!({
         "device_name": DEFAULT_DEVICE_NAME,
@@ -276,9 +264,6 @@ pub async fn cloud_registration_flow(r: &Resolver, identity: &Identity, cloud_de
     Ok(String::new())
 }
 
-// ---------------------------------------------------------------- 会话引导
-
-/// 对应 `bootstrap_session`：注册设备、建立会话、心跳、后台遥测。
 pub async fn bootstrap_session(
     r: &Resolver,
     generation: i64,
@@ -368,7 +353,6 @@ pub async fn bootstrap_session(
     })))
 }
 
-/// 对应 `ensure_slot_session(slot)`：会话新鲜度 + TTL 守卫 + 串行重建。
 pub async fn ensure_slot_session(r: &Resolver, slot: i32) -> Result<SharedSession> {
     {
         let st = r.state.lock();
@@ -421,9 +405,6 @@ pub async fn ensure_slot_session(r: &Resolver, slot: i32) -> Result<SharedSessio
     }
 }
 
-// ---------------------------------------------------------------- 取流
-
-/// 对应 `live_v1_01_flow`：拿到 36p 优先的 live_url（可能需 AES-GCM 解密）。
 pub async fn live_v1_01_flow(r: &Resolver, sess: &SharedSession, live_id: &str) -> Result<Live01Result> {
     let (client, identity, session_key, screen_param, cast_model) = {
         let s = sess.lock();
@@ -482,7 +463,6 @@ pub async fn live_v1_01_flow(r: &Resolver, sess: &SharedSession, live_id: &str) 
     })
 }
 
-/// 对应 `live_v1_02_flow`：换取 appSecret。
 pub async fn live_v1_02_flow(r: &Resolver, sess: &SharedSession) -> Result<String> {
     let (client, identity, session_key) = {
         let s = sess.lock();
@@ -515,7 +495,6 @@ pub async fn live_v1_02_flow(r: &Resolver, sess: &SharedSession) -> Result<Strin
     aes_gcm_decrypt_b64(&encrypted, &session_key)
 }
 
-/// 对应 `vdn_getstream_flow`：MD5 签名换取最终播放地址。
 pub async fn vdn_getstream_flow(
     r: &Resolver,
     identity: &Identity,
@@ -560,7 +539,6 @@ pub async fn vdn_getstream_flow(
     Err(YsptpError::new(format!("VDN did not return final URL: {}", &text[..text.len().min(400)])))
 }
 
-/// 对应 `resolve_channel_once`。
 pub async fn resolve_channel_once(
     r: &Resolver,
     sess: &SharedSession,
@@ -616,7 +594,6 @@ pub async fn resolve_channel_once(
     })
 }
 
-/// 对应 `refresh_channel_controlled`：单设备配额 + 全流程解析 + 缓存写入。
 pub async fn refresh_channel_controlled(r: &Resolver, channel: &str) -> Result<ChannelEntry> {
     let wait = {
         let st = r.state.lock();
@@ -633,7 +610,7 @@ pub async fn refresh_channel_controlled(r: &Resolver, channel: &str) -> Result<C
     };
     log(format!("[{channel}] 正在向央视频协议引擎请求直播源…"), 10.0);
     let result: Result<ChannelEntry> = async {
-        let slot = 0; // Python get_slot_for_channel 恒返回 0
+        let slot = 0;
         let limit = r.args.links_per_device;
         let sess = ensure_slot_session(r, slot).await?;
         if limit > 0 {
@@ -691,7 +668,6 @@ pub async fn refresh_channel_controlled(r: &Resolver, channel: &str) -> Result<C
     Ok(entry)
 }
 
-/// 对应 `send_heartbeat`：串行心跳 + 会话续期 + 空闲配额回收。
 pub async fn send_heartbeat(r: &Resolver) -> Result<()> {
     let Ok(_g) = r.control.try_lock() else { return Ok(()) };
     let slots: Vec<i32> = { r.state.lock().sessions.keys().copied().collect() };

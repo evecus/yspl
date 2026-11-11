@@ -1,8 +1,4 @@
-//! 全部从 ysp-live-v9.5.py 逐项搬过来的常量（值不变）。
-
-pub const VERSION: &str = "9.5.1";
-pub const AUTHOR_COMMUNITY: &str = "https://t.me/+rgxyQeDLtjcxM2U1";
-pub const AUTHOR_CHANNEL: &str = "https://t.me/tmxktg";
+pub const VERSION: &str = "0.1.0";
 
 pub const AK: &str = "9f5c54c4ed0e50109b800f7e28fec205";
 pub const RSA_PUBLIC_KEY_B64: &str = "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAkKeLy4ywWLSnBkwRyqYgF3HMIj05V5uuh5HjyEsZOWnu1NHu3jPQv3sr32wwQNYv5qapsNXmNgLUDHtgHZxqPQAYXltjSRc0qhcD286t62wOIHId8zXS3s1Jy4rgU4qjQWzI9rp/1sE0pMsmwTaJa4zuJ5iz8VwF8Av5oJ1k+HxY+/HLnjNlW1hmWLpuDYmkZYuAoTHa1VGeHQh9FEKI8ZcL3GTQphShUoC+Kg3P1hGUVTtCYapmzPS5lkAdwebuzwvTCfGiTErYZCnPBUSeV7BVlgjtLYIi29KvF0a8FHsJMfe/UdHcyW/RihsIYOtDQcRRpFGXyPXbVrzFJse24QIDAQAB";
@@ -49,7 +45,6 @@ pub const DEFAULT_SERVER_PORT: u16 = 8767;
 pub const DEFAULT_ENGINE_PORT: u16 = 8787;
 pub const TS_MAX_BYTES: usize = 35 * 1024 * 1024;
 
-/// QMF / JCE 协议常量
 pub const VER_NAME: &str = "3.2.7.26212";
 pub const VER_CODE_STR: &str = "302070";
 pub const VER_CODE_I32: i32 = 302070;
@@ -59,7 +54,6 @@ pub const QMF_PLATFORM: i8 = 1;
 pub const BIZ_ID: i64 = 0;
 pub const CHAN_ID: &str = "10070";
 
-/// cKey / TEA 签名常量
 pub const CK_PLATFORM: u32 = 4330403;
 pub const CK_APPVER: &str = "V8.22.1035.3031";
 pub const CK_TEA: [u8; 16] = [
@@ -79,7 +73,6 @@ pub const BK_H264_B64: &str = "SCgzMDoxMDgwLDYwOjEwODB8MzA6MTA4MCw2MDoxMDgwKQ=="
 pub const APP_CHANNEL: &str = "dangbei";
 pub const APP_VERSION: &str = "1.4.1";
 
-/// 与 Python `YSP_HIGH_LOCK_TIMEOUT` 一致（默认 25 秒，下限 1 秒）。
 pub fn high_lock_timeout() -> f64 {
     std::env::var("YSP_HIGH_LOCK_TIMEOUT")
         .ok()
@@ -88,7 +81,6 @@ pub fn high_lock_timeout() -> f64 {
         .max(1.0)
 }
 
-/// 对应 Python `YSP_ONLY_4K_DEVICE`。
 pub fn env_only_4k() -> bool {
     matches!(
         std::env::var("YSP_ONLY_4K_DEVICE")

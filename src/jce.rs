@@ -1,7 +1,3 @@
-//! 对应 Python `class W` / `class R` / `_qua` / `_head` / `_wrap` / `_unwrap`
-//! / `jce_timeshift_url` / `_ckey` 调用方 / `bk_playurls` / `fetch_abs_playlist`。
-//! JCE(Tars) 的 TLV 编解码按 Python 版逐字节对齐，无第三方 crate 可用。
-
 use std::collections::HashMap;
 use std::io::{Read as _, Write as _};
 use std::sync::OnceLock;
@@ -17,8 +13,6 @@ use crate::crypto::tea::ckey;
 use crate::error::{Result, YsptpError};
 use crate::http_client::{HttpClient, HttpResponse};
 use crate::util::{form_urlencode_value, url_host};
-
-// ---------------------------------------------------------------- JCE W（编码）
 
 pub struct W {
     pub b: Vec<u8>,
@@ -130,8 +124,6 @@ impl W {
         self.b
     }
 }
-
-// ---------------------------------------------------------------- JCE R（解码）
 
 #[derive(Debug, Clone)]
 pub enum JceValue {
@@ -281,7 +273,7 @@ impl<'a> R<'a> {
             11 => Ok(JceValue::Zero),
             12 => Ok(JceValue::Zero),
             13 => {
-                let _ = self.head()?; // 子类型头
+                let _ = self.head()?;
                 let n = self.field_int()? as usize;
                 Ok(JceValue::Bytes(self.get(n)?.to_vec()))
             }
@@ -302,8 +294,6 @@ impl<'a> R<'a> {
         Ok(m)
     }
 }
-
-// ---------------------------------------------------------------- QMF 封包
 
 static GUID: OnceLock<String> = OnceLock::new();
 
@@ -402,17 +392,17 @@ pub fn wrap(cmd: u16, body: &[u8], reqid: i32) -> Result<Vec<u8>> {
     let reqcmd = w.out();
 
     let mut inner = Vec::with_capacity(reqcmd.len() + 17);
-    inner.push(38u8); // '&'
+    inner.push(38u8);
     inner.extend_from_slice(&((reqcmd.len() + 17) as i32).to_be_bytes());
     inner.push(1u8);
     inner.extend_from_slice(&[0u8; 10]);
     inner.extend_from_slice(&reqcmd);
-    inner.push(40u8); // '('
+    inner.push(40u8);
     let comp = gzip_compress(&inner)?;
 
     let mut out = Vec::new();
-    out.push(19u8); // 0x13
-    out.extend_from_slice(&0i32.to_be_bytes()); // 长度占位，末尾 patch
+    out.push(19u8);
+    out.extend_from_slice(&0i32.to_be_bytes());
     out.extend_from_slice(&2u16.to_be_bytes());
     out.extend_from_slice(&65281u16.to_be_bytes());
     out.extend_from_slice(&cmd.to_be_bytes());
@@ -455,9 +445,6 @@ pub fn unwrap(data: &[u8]) -> Result<Option<Vec<u8>>> {
     Ok(m.get(&1).map(|v| v.as_bytes()).filter(|b| !b.is_empty()))
 }
 
-// ---------------------------------------------------------------- 时移 / bk
-
-/// 对应 `jce_timeshift_url(pid, sid, start, end, stream='fhd')`。
 pub async fn jce_timeshift_url(
     client: &HttpClient,
     pid: &str,
@@ -507,7 +494,6 @@ pub async fn jce_timeshift_url(
     Ok(url)
 }
 
-/// 对应 `bk_playurls(channel_id, live_pid, defn='fhd')`。
 pub async fn bk_playurls(client: &HttpClient, channel_id: &str, live_pid: &str, defn: &str) -> Result<Vec<String>> {
     let t = ckey(channel_id);
     let ck = t["cKey"].as_str().unwrap_or("");
@@ -607,7 +593,7 @@ pub async fn bk_playurls(client: &HttpClient, channel_id: &str, live_pid: &str, 
         }
         _ => {}
     }
-    // Python: [u for u in dict.fromkeys(urls) if u and '.cctv.' in u]
+
     let mut seen = std::collections::HashSet::new();
     urls.retain(|u| !u.is_empty() && u.contains(".cctv.") && seen.insert(u.clone()));
     if urls.is_empty() {
@@ -621,7 +607,6 @@ pub async fn bk_playurls(client: &HttpClient, channel_id: &str, live_pid: &str, 
     Ok(urls)
 }
 
-/// 对应 `fetch_abs_playlist(url, depth=0)`。
 pub async fn fetch_abs_playlist(client: &HttpClient, url: &str, depth: u8) -> Result<String> {
     let headers = [
         ("User-Agent", "qqlive"),
@@ -670,7 +655,6 @@ pub async fn fetch_abs_playlist(client: &HttpClient, url: &str, depth: u8) -> Re
     Ok(out.join("\n"))
 }
 
-/// 供 HLS 层判断 CDN 主机是否需要签名回放头。
 pub fn host_needs_signed_headers(host: &str) -> bool {
     let lower = host.to_lowercase();
     lower.contains("liveali") || lower.contains("liveten")
@@ -703,7 +687,7 @@ mod tests {
         assert_eq!(pkt[0], 0x13);
         let len = i32::from_be_bytes([pkt[1], pkt[2], pkt[3], pkt[4]]) as usize;
         assert_eq!(len, pkt.len());
-        // unwrap 期望完整的 QMF 响应结构，这里仅校验包体长度字段与 magic
+
         assert!(pkt.len() > 90);
     }
 

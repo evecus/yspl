@@ -1,10 +1,3 @@
-//! 对应 Python 的 HLS 文本处理与 1080p 备用流逻辑：
-//! `_rs_lines` / `rewrite_playlist_urls` / `proxy_playlist_ts_urls` /
-//! `inject_hls_discontinuity` / `fetch_playlist_http1` / `proxy_ts_token` /
-//! `decode_proxy_ts_url` / `parse_catchup_*` / `build_playlist` / `jce_fetch` /
-//! `jce_refresh` / `bk_refresh` / `refresh_once` / `refresh_loop` / `ensure_channel` /
-//! `coalesce_refresh` / `ApiFlowLimiter` / `/all.m3u` 生成 / engine 回退。
-
 use std::collections::HashMap;
 use std::future::Future;
 use std::sync::{Arc, OnceLock};
@@ -25,12 +18,9 @@ use crate::util::{
 
 static HTTP: OnceLock<HttpClient> = OnceLock::new();
 
-/// Python 的 1080p 备用流全部走裸 urllib（固定 timeout），这里是等价的全局客户端。
 pub fn client() -> &'static HttpClient {
     HTTP.get_or_init(|| HttpClient::new(10.0, false).expect("HTTP client init failed"))
 }
-
-// ---------------------------------------------------------------- 限流器
 
 pub struct ApiFlowLimiter {
     min_interval: f64,
@@ -47,7 +37,6 @@ impl ApiFlowLimiter {
         }
     }
 
-    /// 对应 `ApiFlowLimiter.wait_slot()`：最小间隔 + 均匀抖动。
     pub async fn wait_slot(&self) {
         let now = now_f64();
         let target_delay = self.min_interval + rand::random::<f64>() * self.jitter;
@@ -59,9 +48,6 @@ impl ApiFlowLimiter {
     }
 }
 
-// ---------------------------------------------------------------- 文本处理
-
-/// 对应 `_rs_lines`：统一换行、去掉末尾空行与行尾 \r。
 pub fn rs_lines(text: &str) -> Vec<String> {
     let norm = text.replace("\r\n", "\n");
     let mut lines: Vec<String> = norm.split('\n').map(|s| s.to_string()).collect();
@@ -76,7 +62,6 @@ pub fn rs_lines(text: &str) -> Vec<String> {
     lines
 }
 
-/// 对应 `rewrite_playlist_urls`：相对 URL 用 base_url 补全为绝对 URL。
 pub fn rewrite_playlist_urls(text: &str, base_url: &str) -> String {
     let has_base = Url::parse(base_url)
         .map(|u| !u.scheme().is_empty() && u.host_str().is_some())
@@ -102,7 +87,6 @@ pub fn rewrite_playlist_urls(text: &str, base_url: &str) -> String {
     out
 }
 
-/// 对应 `proxy_playlist_ts_urls`：把 .ts 行改成 /proxy.ts?=<base64url> 链。
 pub fn proxy_playlist_ts_urls(playlist: &str, proxy_origin: &str, proxy_prefix: Option<&str>) -> String {
     let origin = proxy_prefix.unwrap_or(proxy_origin).trim_end_matches('/');
     let proxy_query = if proxy_prefix.is_some() { "/proxy?ts=" } else { "/proxy.ts?=" };
@@ -122,7 +106,6 @@ pub fn proxy_playlist_ts_urls(playlist: &str, proxy_origin: &str, proxy_prefix: 
     out
 }
 
-/// 对应 `inject_hls_discontinuity`。
 pub fn inject_hls_discontinuity(pl: &str) -> String {
     if pl.contains("#EXT-X-DISCONTINUITY") {
         return pl.to_string();
@@ -163,7 +146,6 @@ fn pairs(h: &[(String, String)]) -> Vec<(&str, &str)> {
     h.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect()
 }
 
-/// 对应 `fetch_playlist_http1`：手工 HTTP/1.1 + 最多 4 次重定向，不自动跟。
 pub async fn fetch_playlist_http1(
     client: &HttpClient,
     final_url: &str,
@@ -233,8 +215,6 @@ fn to_header_map(headers: &[(&str, &str)]) -> reqwest::header::HeaderMap {
     map
 }
 
-// ---------------------------------------------------------------- TS 代理 token
-
 pub fn query_param(url: &str, name: &str) -> Option<String> {
     let (_, query) = url.split_once('?')?;
     for pair in query.split('&') {
@@ -258,7 +238,6 @@ impl PartitionOnce for str {
     }
 }
 
-/// 对应 `proxy_ts_token(url)`。
 pub fn proxy_ts_token(url: &str) -> Option<String> {
     let (_, query) = url.split_once('?')?;
     if let Some(t) = query.strip_prefix('=') {
@@ -276,7 +255,6 @@ pub fn proxy_ts_token(url: &str) -> Option<String> {
     None
 }
 
-/// 对应 `decode_proxy_ts_url(token)`。
 pub fn decode_proxy_ts_url(token: &str) -> Result<String> {
     let raw = b64_urlsafe_nopad_decode(token)
         .ok_or_else(|| YsptpError::new("invalid proxy ts token"))?;
@@ -295,13 +273,10 @@ pub fn decode_proxy_ts_url(token: &str) -> Result<String> {
     Ok(value)
 }
 
-// ---------------------------------------------------------------- 时移解析
-
 fn cst() -> FixedOffset {
     FixedOffset::east_opt(8 * 3600).unwrap()
 }
 
-/// 对应 `parse_catchup_time_val`。
 pub fn parse_catchup_time_val(val_str: Option<&str>) -> Option<i64> {
     let val = val_str?.trim();
     if val.is_empty() {
@@ -324,7 +299,7 @@ pub fn parse_catchup_time_val(val_str: Option<&str>) -> Option<i64> {
         }
     }
     let clean = {
-        // 去掉小数部分
+
         let mut s = String::new();
         let mut chars = val.chars().peekable();
         while let Some(c) = chars.next() {
@@ -362,7 +337,6 @@ pub fn parse_catchup_time_val(val_str: Option<&str>) -> Option<i64> {
     None
 }
 
-/// 对应 `parse_catchup_query(query_str)`。
 pub fn parse_catchup_query(query_str: &str) -> Option<(i64, i64)> {
     if query_str.is_empty() {
         return None;
@@ -395,9 +369,7 @@ pub fn parse_catchup_query(query_str: &str) -> Option<(i64, i64)> {
     Some((start, end))
 }
 
-// ---------------------------------------------------------------- 1080p 备用流
-
-type Segment = (f64, String, String); // (duration, pdt, url)
+type Segment = (f64, String, String);
 
 pub fn seg_key(url: &str, pdt: &str) -> String {
     if !pdt.is_empty() {
@@ -456,7 +428,7 @@ async fn jce_fetch(ch: &SharedChannel) -> Result<Vec<Segment>> {
 }
 
 async fn ch_app_flow_limiter() {
-    // Python 的 global_flow_limiter 是进程级单例；这里用静态实例保持一致。
+
     static L: OnceLock<ApiFlowLimiter> = OnceLock::new();
     L.get_or_init(|| ApiFlowLimiter::new(700, 250)).wait_slot().await;
 }
@@ -582,7 +554,6 @@ async fn bk_refresh(ch: &SharedChannel) -> Result<bool> {
     Err(YsptpError::new(if last_err.is_empty() { "bk playlist failed".to_string() } else { last_err[..last_err.len().min(120)].to_string() }))
 }
 
-/// 对应 `refresh_once(ch)`：JCE 域名失效时切换 bkliveinfo。
 pub async fn refresh_once(ch: &SharedChannel) -> bool {
     let mode = { ch.lock().mode.clone() };
     let result = if mode == "bk" {
@@ -617,7 +588,6 @@ pub async fn refresh_once(ch: &SharedChannel) -> bool {
     }
 }
 
-/// 对应 `build_playlist(ch, holdback=True)`。
 pub fn build_playlist(ch: &SharedChannel, holdback: bool) -> Option<String> {
     let mut c = ch.lock();
     if c.mode == "bk" {
@@ -659,7 +629,6 @@ pub fn build_playlist(ch: &SharedChannel, holdback: bool) -> Option<String> {
     Some(res)
 }
 
-/// 对应 `coalesce_refresh`：同频道并发刷新合并，其他请求等待完成事件。
 pub async fn coalesce_refresh<Fut: Future<Output = ()>>(
     app: &Arc<AppState>,
     slug: &str,
@@ -685,7 +654,6 @@ pub async fn coalesce_refresh<Fut: Future<Output = ()>>(
     ev.notify_waiters();
 }
 
-/// 对应 `ensure_channel(ch)`：冷启动立即拉取 + 启动后台刷新循环。
 pub async fn ensure_channel(app: &Arc<AppState>, ch: &SharedChannel) {
     let now = now_f64();
     let (need_fetch, thread_dead, wait_only, slug) = {
@@ -734,7 +702,6 @@ pub async fn ensure_channel(app: &Arc<AppState>, ch: &SharedChannel) {
     ch.lock().starting = false;
 }
 
-/// 对应 `refresh_loop(ch)`：按 10 秒间隔刷新，空闲 120 秒后退出。
 async fn refresh_loop(_app: &Arc<AppState>, ch: &SharedChannel) {
     let (slug, mode, defn) = {
         let c = ch.lock();
@@ -758,7 +725,6 @@ async fn refresh_loop(_app: &Arc<AppState>, ch: &SharedChannel) {
     log(format!("[{slug}] 空闲超时，已停止后台拉取"), 10.0);
 }
 
-/// 对应 `trigger_background_refresh(ch)`。
 pub fn trigger_background_refresh(app: &Arc<AppState>, ch: &SharedChannel) {
     let slug = { ch.lock().slug.clone() };
     if app.inflight_events.lock().contains_key(&slug) {
@@ -776,9 +742,6 @@ pub fn trigger_background_refresh(app: &Arc<AppState>, ch: &SharedChannel) {
     });
 }
 
-// ---------------------------------------------------------------- 订阅清单 / engine 回退
-
-/// 对应 `/all.m3u` 路由的内容生成。
 pub fn build_all_m3u(app: &AppState, host: &str, proto: &str, group_filter: Option<&str>, only_4k: bool) -> String {
     let mut lines = vec![
         "#EXTM3U url-tvg=\"https://epg.zsdc.eu.org/t.xml.gz,https://epg.pw/xmltv/epg_CN.xml.gz\" x-tvg-url=\"https://epg.zsdc.eu.org/t.xml.gz\"".to_string(),
@@ -808,7 +771,6 @@ pub fn build_all_m3u(app: &AppState, host: &str, proto: &str, group_filter: Opti
     format!("{}\n", lines.join("\n"))
 }
 
-/// Python `urllib.parse.quote(s, safe='')`：只保留 unreserved 字符。
 pub fn quote_all(s: &str) -> String {
     let mut out = String::new();
     for &b in s.as_bytes() {
@@ -822,7 +784,6 @@ pub fn quote_all(s: &str) -> String {
     out
 }
 
-/// 对应 `_is_safe_engine_proxy_url`（含 SSRF 防护与 localhost 递归）。
 pub fn is_safe_engine_proxy_url(app: &AppState, target: &str, depth: u8) -> bool {
     if depth > 2 {
         return false;
@@ -852,7 +813,6 @@ pub fn is_safe_engine_proxy_url(app: &AppState, target: &str, depth: u8) -> bool
         .any(|s| host == s[1..] || host.ends_with(s))
 }
 
-/// 对应 `fetch_upstream_engine_playlist`：从伴生引擎拉 playlist 并改写为 /engine_proxy 链。
 pub async fn fetch_upstream_engine_playlist(
     app: &AppState,
     canonical: &str,

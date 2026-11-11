@@ -1,7 +1,3 @@
-//! 对应 Python `HttpClient` / `robust_urlopen` / `response_json`。
-//! 关键 1:1 语义：禁用系统代理、仅 HTTP/1.1、CookieJar、gzip 解压、DNS 抖动重试、
-//! 强制 IPv4（Python 用 monkey patch `socket.getaddrinfo`，这里用自定义 DNS resolver）。
-
 use std::net::SocketAddr;
 use std::time::Duration;
 
@@ -12,7 +8,6 @@ use serde_json::Value;
 use crate::error::{normalize_network_error, Result, YsptpError};
 use crate::util;
 
-/// Python 顶部的 IPv4 强制补丁：把所有 DNS 查询收敛到 A 记录。
 #[derive(Clone, Debug)]
 struct Ipv4OnlyResolver;
 
@@ -51,12 +46,11 @@ impl HttpResponse {
 #[derive(Clone)]
 pub struct HttpClient {
     inner: reqwest::Client,
-    /// 不跟随重定向、不加默认头的裸客户端（对应 Python http.client 手工请求）。
+
     no_redirect: reqwest::Client,
     timeout: Duration,
 }
 
-/// Python `robust_urlopen` 的错误匹配集合。
 fn is_dns_jitter_error(e: &reqwest::Error) -> bool {
     let s = e.to_string().to_lowercase();
     ["-3", "getaddrinfo", "temporary failure", "timed out", "connection reset", "dns"]
@@ -81,13 +75,13 @@ impl HttpClient {
     pub fn new(timeout: f64, insecure_tls: bool) -> Result<Self> {
         let timeout = Duration::from_secs_f64(timeout.max(0.1));
         let builder = reqwest::Client::builder()
-            // Python: ProxyHandler({}) + build_opener(...) —— 禁用系统代理
+
             .no_proxy()
-            // Python: http.client / urllib 均为 HTTP/1.1
+
             .http1_only()
-            // Python: HTTPCookieProcessor(CookieJar())
+
             .cookie_store(true)
-            // Python: urllib 默认跟随重定向
+
             .redirect(Policy::limited(10))
             .timeout(timeout)
             .connect_timeout(timeout)
@@ -110,7 +104,6 @@ impl HttpClient {
         Ok(Self { inner, no_redirect, timeout })
     }
 
-    /// 不做重定向、不加默认头的裸客户端（对应 Python `http.client.HTTPConnection`）。
     pub fn raw_client(&self) -> reqwest::Client {
         self.no_redirect.clone()
     }
@@ -119,7 +112,6 @@ impl HttpClient {
         self.timeout
     }
 
-    /// 对应 `HttpClient._send`。
     pub async fn send(
         &self,
         method: reqwest::Method,
@@ -130,7 +122,6 @@ impl HttpClient {
         self.send_timeout(method, url, headers, data, self.timeout).await
     }
 
-    /// 与 `send` 相同但可覆盖单次超时（Python 里 jce/bk/fetch_abs 各自用裸 urllib 指定不同 timeout）。
     pub async fn send_timeout(
         &self,
         method: reqwest::Method,
@@ -158,8 +149,7 @@ impl HttpClient {
                     let headers = resp.headers().clone();
                     let body = resp.bytes().await.map_err(|e| YsptpError::new(normalize_network_error(&e)))?;
                     let mut body = body.to_vec();
-                    // Python 手动 gzip.decompress；reqwest gzip feature 通常已解压，
-                    // 若服务端仍给出 gzip 而客户端未处理，这里兜底。
+
                     if headers
                         .get("content-encoding")
                         .and_then(|v| v.to_str().ok())
@@ -213,7 +203,6 @@ pub fn response_json(resp: &HttpResponse) -> (u16, String, Option<Value>) {
     (resp.status, text, value)
 }
 
-/// 供 TS 分片代理使用的裸流式请求（不跟随重定向、不自动加默认头）。
 pub async fn raw_get(
     client: &reqwest::Client,
     url: &str,

@@ -1,10 +1,9 @@
 use std::fmt;
 
-/// 对应 Python `YsptpError` / `DeadHostError`。
 #[derive(Debug, Clone)]
 pub enum YsptpError {
     Msg(String),
-    /// jce_timeshift_url 返回的 CDN 域名已失效，需切换 bkliveinfo 备用通道。
+
     DeadHost(String),
 }
 
@@ -38,7 +37,6 @@ impl std::error::Error for YsptpError {}
 
 pub type Result<T> = std::result::Result<T, YsptpError>;
 
-/// 对应 Python `_normalize_network_error(e)`：把网络异常归一为可分类的字符串。
 pub fn normalize_network_error(e: &reqwest::Error) -> String {
     if e.is_timeout() {
         return format!("operation timed out: {e}");

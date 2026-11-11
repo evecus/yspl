@@ -1,8 +1,7 @@
 #!/bin/sh
-# ysp-live v9.5.1 —— Rust 版一键部署（保留原版交互菜单与 host 网络模式）
 
-CONTAINER_NAME="ysp-live"
-INSTALL_DIR="/root/ysp-live"
+CONTAINER_NAME="yspl"
+INSTALL_DIR="/root/yspl"
 PORT="8767"
 
 get_local_ip() {
@@ -21,7 +20,7 @@ IP=$(get_local_ip)
 show_links() {
     echo ""
     echo "===================================================================="
-    echo "  📌 ysp-live 服务访问与管理链接："
+    echo "  📌 yspl 服务访问与管理链接："
     printf "   • 全频道订阅地址: \033[1;32mhttp://%s:%s/all.m3u\033[0m\n" "$IP" "$PORT"
     printf "   • 系统健康度检查: \033[1;32mhttp://%s:%s/health\033[0m\n" "$IP" "$PORT"
     printf "   • 实时诊断与日志: \033[1;32mhttp://%s:%s/diag\033[0m\n" "$IP" "$PORT"
@@ -31,7 +30,7 @@ show_links() {
 
 do_install() {
     echo "===================================================================="
-    echo "  🚀 开始部署 ysp-live (Rust 版)..."
+    echo "  🚀 开始部署 yspl (Rust 版)..."
     echo "===================================================================="
 
     if ! command -v docker >/dev/null 2>&1; then
@@ -46,7 +45,7 @@ do_install() {
     docker compose up -d --build
 
     if [ $? -eq 0 ]; then
-        printf "\033[1;32m[2/2] ysp-live 部署成功！\033[0m\n"
+        printf "\033[1;32m[2/2] yspl 部署成功！\033[0m\n"
         show_links
     else
         printf "\033[1;31m[错误] 容器启动失败，请检查 Docker 日志。\033[0m\n"

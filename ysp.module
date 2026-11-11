@@ -1,7 +1,5 @@
 #!name=央视频直连分流
 #!desc=解决央视频4K/8K直播及高码率因走代理导致403的问题
-#!author=大亨 (TMXK)
-#!homepage=https://t.me/tmxktg
 #!date=2026-11-04
 
 [Rule]

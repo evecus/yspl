@@ -1,7 +1,3 @@
-//! 对应 Python 手写密码学段落（_aes256_key_schedule / aes_gcm_encrypt /
-//! aes_gcm_decrypt_b64 / rsa_oaep_sha256_encrypt / rsa_encrypt_device_id）。
-//! 语义完全一致，实现改用成熟 crate。
-
 pub mod tea;
 
 use aes_gcm::aead::{Aead, KeyInit};
@@ -16,7 +12,6 @@ use crate::constants::RSA_PUBLIC_KEY_B64;
 use crate::error::{Result, YsptpError};
 use crate::util::{b64_standard_decode, b64_standard_encode};
 
-/// Python `normalize_aes_key`: 字符串 UTF-8 字节后补 \\0 到 32 字节（不是哈希）。
 pub fn normalize_aes_key(value: &str) -> [u8; 32] {
     let mut key = [0u8; 32];
     let raw = value.as_bytes();
@@ -41,7 +36,6 @@ fn aes_gcm_decrypt(key: &[u8; 32], nonce: &[u8; 12], ct_and_tag: &[u8]) -> Resul
         .map_err(|_| YsptpError::new("AES-GCM decrypt failed"))
 }
 
-/// 对应 `aes_gcm_decrypt_b64(value, key)`：b64 -> nonce(12) || ct||tag -> 明文 UTF-8。
 pub fn aes_gcm_decrypt_b64(value: &str, key: &str) -> Result<String> {
     let raw = b64_standard_decode(value)
         .ok_or_else(|| YsptpError::new("base64 decode failed"))?;
@@ -54,7 +48,6 @@ pub fn aes_gcm_decrypt_b64(value: &str, key: &str) -> Result<String> {
     String::from_utf8(plain).map_err(|e| YsptpError::new(format!("AES-GCM plaintext is not UTF-8: {e}")))
 }
 
-/// 对应 `aes_gcm_encrypt_b64(value, key)`：随机 12 字节 nonce + ct||tag，再 b64。
 pub fn aes_gcm_encrypt_b64(value: &str, key: &str) -> Result<String> {
     let mut nonce = [0u8; 12];
     OsRng.fill_bytes(&mut nonce);
@@ -65,8 +58,6 @@ pub fn aes_gcm_encrypt_b64(value: &str, key: &str) -> Result<String> {
     Ok(b64_standard_encode(&out))
 }
 
-/// 对应 `rsa_encrypt_device_id`：SPKI DER 公钥，RSA-OAEP-SHA256/MGF1-SHA256，
-/// 按 k-2*hlen-2 分块加密后拼接再 base64。
 pub fn rsa_encrypt_device_id(device_id: &str) -> Result<String> {
     let der = b64_standard_decode(RSA_PUBLIC_KEY_B64)
         .ok_or_else(|| YsptpError::new("RSA public key base64 decode failed"))?;

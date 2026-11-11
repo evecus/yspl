@@ -1,6 +1,6 @@
-# ysp-live-rs
+# yspl-rs
 
-央视频（YSP）直播网关的 **Rust 全量 1:1 重写**，基线为原版 `ysp-live-v9.5.py`（v9.5.1）。
+央视频（YSP）直播网关的 **Rust 全量 1:1 重写**，基线为原版 `yspl-v0.1.0.py`（v0.1.0）。
 所有协议、状态机、路由、持久化格式（`device-state-rs.json` / `proxy-cache-state-rs.json`）、
 CLI 参数与 HTTP 行为均与 Python 版逐字节对齐；Node 伴生引擎 `ysp-engine.js` 与
 `/engine_proxy` 回退按原版保留。
@@ -19,7 +19,7 @@ CLI 参数与 HTTP 行为均与 Python 版逐字节对齐；Node 伴生引擎 `y
 
 ```bash
 cargo build --release
-./target/release/ysp-live 8767 --data-dir ./data
+./target/release/yspl 8767 --data-dir ./data
 # 参数与 Python 版一致：PORT（位置参数）、--bind、--data-dir、--cache-mb、--no-4k、--engine-port 等
 ```
 
@@ -60,4 +60,4 @@ cargo test    # 36 项：b64/JCE/cKey/指纹/别名/TS 链路/持久化键序等
 
 ## 声明
 
-本项目仅为原版 ysp-live 的语言迁移，用途与授权范围同原版；取流稳定性取决于上游协议与风控，与语言无关。
+本项目仅为原版 yspl 的语言迁移，用途与授权范围同原版；取流稳定性取决于上游协议与风控，与语言无关。

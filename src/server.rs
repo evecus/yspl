@@ -1,7 +1,3 @@
-//! 对应 Python `class Handler(BaseHTTPRequestHandler)` 的 `_send` / `do_HEAD` / `do_GET`。
-//! 路由：/、/favicon.ico、/health、/all.m3u、/diag、/proxy.ts、/proxy、
-//! /engine_proxy、/<channel>.m3u8，全部 1:1 保留。
-
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -25,7 +21,6 @@ fn hv(v: &str) -> Option<HeaderValue> {
     HeaderValue::from_str(&header_value_clean(v)).ok()
 }
 
-/// 对应 `Handler._send`：统一响应头（含 Server / CORS / Cache-Control / Content-Length）。
 fn send(
     code: u16,
     body: Vec<u8>,
@@ -35,7 +30,7 @@ fn send(
 ) -> Response {
     let mut builder = Response::builder()
         .status(StatusCode::from_u16(code).unwrap_or(StatusCode::OK))
-        .header("Server", format!("ysp-live/{VERSION}"))
+        .header("Server", format!("yspl/{VERSION}"))
         .header("Content-Type", ctype)
         .header("Content-Length", body.len().to_string())
         .header("Access-Control-Allow-Origin", "*")
@@ -99,15 +94,12 @@ async fn handle(
         let host = host_header(&req, &app);
         let text = format!(
             "====================================================\n\
-ysp-live IPTV 直播网关运行中 (端口: {})\n\
-📢 官方发布社区: {}\n\
-📢 官方发布频道: {}\n\
-⚠️ 严正声明: 其他任何渠道均非作者发布！\n\
+yspl IPTV 直播网关运行中 (端口: {})\n\
 ====================================================\n\n\
 全频道订阅: http://{host}/all.m3u\n\
 系统健康度: http://{host}/health\n\
 实时诊断日志: http://{host}/diag\n",
-            app.args.port, AUTHOR_COMMUNITY, AUTHOR_CHANNEL
+            app.args.port
         );
         return text_response(200, &text, head_only);
     }
@@ -146,8 +138,6 @@ ysp-live IPTV 直播网关运行中 (端口: {})\n\
     text_response(404, "not found\n", head_only)
 }
 
-// ---------------------------------------------------------------- /health
-
 fn health_response(app: &AppState, head_only: bool) -> Response {
     let now = now_f64();
     let (sess_valid, heartbeat_count, guid, active_slots) = {
@@ -170,9 +160,6 @@ fn health_response(app: &AppState, head_only: bool) -> Response {
     let health = serde_json::json!({
         "ok": true,
         "version": VERSION,
-        "author_community": AUTHOR_COMMUNITY,
-        "author_channel": AUTHOR_CHANNEL,
-        "notice": "其他渠道均非作者发布！",
         "uptime_sec": (now - app.server_start_time) as i64,
         "engine": {
             "ready": app.ready(),
@@ -189,17 +176,11 @@ fn health_response(app: &AppState, head_only: bool) -> Response {
     send(200, format!("{body}\n").into_bytes(), "application/json; charset=utf-8", head_only, &[])
 }
 
-// ---------------------------------------------------------------- /diag
-
 fn diag_response(app: &AppState, head_only: bool) -> Response {
     let now = now_f64();
     let mut info = vec![
         "====================================================".to_string(),
-        format!("ysp-live v9.5.1 诊断报告 (运行时间: {}s)", (now - app.server_start_time) as i64),
-        "📢 首发地址".to_string(),
-        format!("社区：Gary's Club ({AUTHOR_COMMUNITY})"),
-        format!("频道：Gary's Club Channel ({AUTHOR_CHANNEL})"),
-        "⚠️ 其他任何分发渠道均非作者本人！".to_string(),
+        format!("yspl v0.1.0 诊断报告 (运行时间: {}s)", (now - app.server_start_time) as i64),
         "====================================================".to_string(),
     ];
     let engine_status = if app.ready() { "就绪" } else { "未就绪(1080p自动回退)" };
@@ -278,8 +259,6 @@ fn diag_response(app: &AppState, head_only: bool) -> Response {
     text_response(200, &format!("{}\n", info.join("\n")), head_only)
 }
 
-// ---------------------------------------------------------------- /proxy.ts
-
 async fn proxy_ts(app: &Arc<AppState>, range_header: Option<String>, full_path: &str, head_only: bool) -> Response {
     let Some(token) = hls::proxy_ts_token(full_path) else {
         return text_response(400, "missing proxy ts token\n", head_only);
@@ -296,7 +275,7 @@ async fn proxy_ts(app: &Arc<AppState>, range_header: Option<String>, full_path: 
             extra.push(("Cache-Control".into(), "public, max-age=300".into()));
             let mut builder = Response::builder()
                 .status(StatusCode::OK)
-                .header("Server", format!("ysp-live/{VERSION}"))
+                .header("Server", format!("yspl/{VERSION}"))
                 .header("Content-Length", data.len().to_string());
             for (k, v) in &extra {
                 if let Some(val) = hv(v) {
@@ -370,7 +349,7 @@ async fn proxy_ts(app: &Arc<AppState>, range_header: Option<String>, full_path: 
     extra.push(("Cache-Control".into(), "public, max-age=300".into()));
     let mut builder = Response::builder()
         .status(StatusCode::from_u16(status).unwrap_or(StatusCode::BAD_GATEWAY))
-        .header("Server", format!("ysp-live/{VERSION}"))
+        .header("Server", format!("yspl/{VERSION}"))
         .header("Content-Length", body_bytes.len().to_string());
     for (k, v) in &extra {
         if let Some(val) = hv(v) {
@@ -393,8 +372,6 @@ fn to_header_map(headers: &[(String, String)]) -> reqwest::header::HeaderMap {
     }
     map
 }
-
-// ---------------------------------------------------------------- /engine_proxy
 
 async fn engine_proxy(app: &Arc<AppState>, query: &str, head_only: bool) -> Response {
     let qs: HashMap<String, String> = url::form_urlencoded::parse(query.as_bytes())
@@ -423,8 +400,6 @@ async fn engine_proxy(app: &Arc<AppState>, query: &str, head_only: bool) -> Resp
     }
 }
 
-// ---------------------------------------------------------------- /<channel>.m3u8
-
 async fn channel_playlist(
     app: &Arc<AppState>,
     proto: &str,
@@ -439,7 +414,6 @@ async fn channel_playlist(
         return text_response(404, "未知频道\n", head_only);
     };
 
-    // 时移回看
     if let Some((start, end)) = hls::parse_catchup_query(query) {
         if crate::channels::supports_timeshift(&canonical) {
             let (pid, sid, defn) = {
@@ -485,7 +459,7 @@ async fn channel_playlist(
                     }
                     Ok(Some(_)) => {}
                     Ok(None) => {
-                        // 换台防抖：直接落到 1080p 备用流
+
                     }
                     Err(e) => {
                         record_high_failure(r, &canonical, &e);
@@ -542,7 +516,6 @@ async fn channel_playlist(
     text_response(503, &format!("频道 {name} 暂无数据 ({}), 请稍后重试\n", if err.is_empty() { "拉取中" } else { &err }), head_only)
 }
 
-/// 高码率取流失败：清缓存、累加失败次数、按次数冷却、记录日志。
 fn record_high_failure(r: &Arc<crate::resolver::Resolver>, canonical: &str, e: &YsptpError) {
     {
         let mut st = r.state.lock();

@@ -1,9 +1,3 @@
-//! 对应 Python `Identity` / `build_identity` / `fresh_headers` / `root_headers` /
-//! `build_report_common_value` / `build_app_start_body` / `build_collect_headers` /
-//! `build_vdn_appcommon` / `default_cctv_playback_headers` /
-//! `cctv_playback_headers_for_entry` / `_playback_request_headers` /
-//! `entry_missing_signed_playback_headers` / `ts_path_matches_final_url`。
-
 use std::collections::HashMap;
 
 use serde_json::{json, Value};
@@ -19,7 +13,6 @@ use crate::util::{
 
 pub type Headers = Vec<(String, String)>;
 
-/// 把持久化/内部 headers 转成 HttpClient 需要的借用切片。
 pub fn as_pairs(h: &Headers) -> Vec<(&str, &str)> {
     h.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect()
 }
@@ -70,7 +63,6 @@ pub fn build_identity(profile: &DeviceProfile, app_channel: &str, version: &str)
     Identity { x_uid, x_fingerprint: xfp, fingerprint_timestamp_ms: ts, headers }
 }
 
-/// 对应 `fresh_headers`：按顺序重组请求头，注入 X-Timestamp / X-Nonce。
 pub fn fresh_headers(
     template: &Headers,
     content_type: &str,
@@ -131,7 +123,6 @@ pub fn build_vdn_appcommon(version: &str) -> String {
     .unwrap_or_default()
 }
 
-/// Python `app_start_field(value, limit)`：str(value)[:limit]，按字符截断。
 pub fn app_start_field(value: &str, limit: usize) -> String {
     if limit == usize::MAX {
         return value.to_string();
@@ -139,7 +130,6 @@ pub fn app_start_field(value: &str, limit: usize) -> String {
     value.chars().take(limit).collect()
 }
 
-/// 对应 `build_report_common_value`，返回有序 JSON（serde 默认 BTreeMap == sort_keys）。
 pub fn build_report_common_value(
     profile: &DeviceProfile,
     x_uid: &str,
@@ -253,7 +243,6 @@ pub fn entry_missing_signed_playback_headers(entry: &ChannelEntry) -> bool {
         .any(|k| entry.playback_headers.get(*k).map(|v| v.trim().is_empty()).unwrap_or(true))
 }
 
-/// 对应 `_playback_request_headers`（白名单 + 固定 Accept/Connection）。
 pub fn playback_request_headers(
     playback_headers: &HashMap<String, String>,
     extra: Option<&[(String, String)]>,
@@ -331,7 +320,7 @@ mod tests {
 
     #[test]
     fn ts_path_prefix_match() {
-        // Python 语义：ts_path.startswith(final_url 路径去掉 .m3u8)
+
         assert!(ts_path_matches_final_url("/live/a/playlist1.ts", "https://x.cn/live/a/playlist.m3u8"));
         assert!(!ts_path_matches_final_url("/live/a/b.ts", "https://x.cn/live/a/playlist.m3u8"));
         assert!(!ts_path_matches_final_url("/other.ts", "https://x.cn/live/a/playlist.m3u8"));

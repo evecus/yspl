@@ -1,7 +1,3 @@
-//! 对应 Python `channels()` / `channel_by_name()` / `get_channel_group()` /
-//! `ChannelDirectory` / `ALIAS_MAP` / `TVG_IDS` / 各频道集合。
-//! 静态数据由 `channels_data.rs` 提供（机械抽取，1:1）。
-
 use std::collections::{HashMap, HashSet};
 use std::sync::OnceLock;
 
@@ -53,7 +49,6 @@ fn force_bk_set() -> &'static HashSet<&'static str> {
     S.get_or_init(|| FORCE_BK.iter().copied().collect())
 }
 
-/// Python `get_channel_group`: cctv*/cgtn* -> 「央视」，其余「卫视」。
 pub fn get_channel_group(slug: &str) -> String {
     let s = canonical(slug);
     if s.starts_with("cctv") || s.starts_with("cgtn") {
@@ -63,7 +58,6 @@ pub fn get_channel_group(slug: &str) -> String {
     }
 }
 
-/// 归一化 + 别名映射后的规范 slug。
 pub fn canonical(raw: &str) -> String {
     let key = normalize_channel(raw);
     match alias_map().get(key.as_str()) {
@@ -96,7 +90,7 @@ pub struct ChannelDirectory {
 }
 
 impl ChannelDirectory {
-    /// 对应 `load_defaults()`。
+
     pub fn new() -> Self {
         let mut dir = ChannelDirectory::default();
         for (slug, name, sid, pid, defn) in DEFAULT_CHANNELS {
@@ -154,7 +148,7 @@ mod tests {
     #[test]
     fn alias_resolution() {
         assert_eq!(canonical("anhuiws"), "ahws");
-        // Python ALIAS_MAP 无 'cctv-5+' 条目，原样保留
+
         assert_eq!(canonical("CCTV-5+.m3u8"), "cctv-5+");
         assert_eq!(canonical("cctv5plus"), "cctv5p");
         assert_eq!(canonical("cctv16_4k"), "cctv164k");
