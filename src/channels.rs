@@ -1,3 +1,7 @@
+//! 对应 Python `channels()` / `channel_by_name()` / `get_channel_group()` /
+//! `ChannelDirectory` / `ALIAS_MAP` / `TVG_IDS` / 各频道集合。
+//! 静态数据由 `channels_data.rs` 提供（机械抽取，1:1）。
+
 use std::collections::{HashMap, HashSet};
 use std::sync::OnceLock;
 

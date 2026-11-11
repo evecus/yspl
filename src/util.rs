@@ -1,3 +1,6 @@
+//! 工具函数：对应 Python `ysp-live-v9.5.py` 中的 now_f64 / log / sha1_upper /
+//! java_string_hashcode / compute_fingerprint / form_encode / 错误分类等。
+
 use std::collections::{HashMap, VecDeque};
 use std::io::Write as _;
 use std::sync::OnceLock;

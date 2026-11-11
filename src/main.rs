@@ -1,12 +1,13 @@
+//! ysp-live v9.5.1 —— 入口。对应 Python `main()` / `_handle_sigterm` / `atexit`。
+
 use std::sync::Arc;
 
-use clap::Parser;
-
-use crate::engine::{start_companion_engine, stop_companion_engine};
-use crate::resolver::Resolver;
-use crate::state::AppState;
-use crate::util::log;
-use crate::{server, Cli};
+use clap::Parser as _;
+use ysp_live::engine::{start_companion_engine, stop_companion_engine};
+use ysp_live::resolver::Resolver;
+use ysp_live::state::AppState;
+use ysp_live::util::log;
+use ysp_live::{server, Cli};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
@@ -41,13 +42,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         "[系统] 高码率模式: {}",
         if cli.no_4k {
             "已禁用 (--no-4k)，全频道走 1080p JCE/bkliveinfo".to_string()
-        } else if cli.only_4k || crate::constants::env_only_4k() {
+        } else if cli.only_4k || ysp_live::constants::env_only_4k() {
             "仅 4K/8K 频道走设备协议 (其余走 1080p JCE/bkliveinfo)".to_string()
         } else {
             format!(
                 "全部 {} 个高码率频道走单设备并发池 (1 台设备, 高码率并发上限: {} 路, 空闲超 {}s 释放配额, 换台防抖: {}s)",
                 app.active_backend.len(), app.args.links_per_device,
-                crate::constants::LINK_IDLE_TIMEOUT, cli.zap_debounce
+                ysp_live::constants::LINK_IDLE_TIMEOUT, cli.zap_debounce
             )
         }
     ), 0.0);
@@ -64,12 +65,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let count = app.directory.count();
     let c_yangshi = app.directory.count_cctv();
     let c_weishi = app.directory.count_weishi();
+    let red = "\x1b[1;31m";
+    let reset = "\x1b[0m";
     log("====================================================================", 0.0);
-    log(format!("yspl 启动成功: {count} 个独立频道 (央视 {c_yangshi} 路, 卫视 {c_weishi} 路)"), 0.0);
+    log(format!("ysp-live v9.5.1 启动成功: {count} 个独立频道 (央视 {c_yangshi} 路, 卫视 {c_weishi} 路)"), 0.0);
     log(format!("全频道订阅:   http://localhost:{}/all.m3u", cli.port), 0.0);
     log(format!("系统健康度:   http://localhost:{}/health", cli.port), 0.0);
     log(format!("实时诊断日志: http://localhost:{}/diag", cli.port), 0.0);
-    log("====================================================================", 0.0);
+    log(format!("{red}--------------------------------------------------------------------{reset}"), 0.0);
+    log(format!("{red}📢 公告{reset}"), 0.0);
+    log(format!("{red}社区：大亨分享 ({}){reset}", ysp_live::constants::AUTHOR_COMMUNITY), 0.0);
+    log(format!("{red}频道：TMXKの分享 ({}){reset}", ysp_live::constants::AUTHOR_CHANNEL), 0.0);
+    log(format!("{red}⚠️ 其他任何分发渠道均非作者本人！{reset}"), 0.0);
+    log(format!("{red}===================================================================={reset}"), 0.0);
 
     tokio::select! {
         res = server::serve(app.clone()) => {

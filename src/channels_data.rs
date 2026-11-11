@@ -1,3 +1,6 @@
+// @generated 由 gen_data.py 从 ysp-live-v9.5.py 机械抽取，请勿手工编辑。
+// 频道定义 / 别名 / EPG / 分组 / 高码率与回看集合，与 Python 版逐项一致。
+
 /// (slug, name, sid, pid, defn)
 pub static DEFAULT_CHANNELS: &[(&str, &str, &str, &str, &str)] = &[
     ("cctv1", "CCTV-1 综合", "2024078201", "600001859", "fhd"),

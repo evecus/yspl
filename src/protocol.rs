@@ -1,3 +1,8 @@
+//! 对应 Python `Resolver` 里所有设备协议 HTTP 流程：
+//! bootstrap_session / app_start_flow / cloud_registration_flow / device_info_report_flow /
+//! heartbeat_flow / index_flow / warmup_flow / live_v1_01_flow / live_v1_02_flow /
+//! vdn_getstream_flow / resolve_channel_once / refresh_channel_controlled / send_heartbeat。
+
 use std::path::Path;
 use std::time::Duration;
 

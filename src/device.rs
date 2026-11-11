@@ -1,3 +1,8 @@
+//! 对应 Python `DeviceProfile` / `DeviceState` / `DEVICE_PROFILE_POOL` /
+//! `load_device_state` / `save_device_state` / `create_and_save_new_device` /
+//! `compute_x_uid` / `infer_os_version` / `infer_sdk_int`。
+//! 持久化格式与 `device-state-rs.json` 完全兼容（sort_keys + indent=2 + 原子替换）。
+
 use std::fs;
 use std::path::Path;
 

@@ -1,3 +1,7 @@
+//! 对应 Python `HttpClient` / `robust_urlopen` / `response_json`。
+//! 关键 1:1 语义：禁用系统代理、仅 HTTP/1.1、CookieJar、gzip 解压、DNS 抖动重试、
+//! 强制 IPv4（Python 用 monkey patch `socket.getaddrinfo`，这里用自定义 DNS resolver）。
+
 use std::net::SocketAddr;
 use std::time::Duration;
 

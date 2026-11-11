@@ -1,3 +1,7 @@
+//! 对应 Python `status_json()` / `write_meta()` / `load_cache()`。
+//! 持久化文件名与字段保持兼容：`proxy-cache-state-rs.json`、
+//! `device-state-rs.json`，均为 sort_keys + indent=2 + 原子替换。
+
 use std::collections::HashMap;
 use std::path::Path;
 

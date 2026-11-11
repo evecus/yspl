@@ -1,3 +1,9 @@
+//! 对应 Python `Identity` / `build_identity` / `fresh_headers` / `root_headers` /
+//! `build_report_common_value` / `build_app_start_body` / `build_collect_headers` /
+//! `build_vdn_appcommon` / `default_cctv_playback_headers` /
+//! `cctv_playback_headers_for_entry` / `_playback_request_headers` /
+//! `entry_missing_signed_playback_headers` / `ts_path_matches_final_url`。
+
 use std::collections::HashMap;
 
 use serde_json::{json, Value};

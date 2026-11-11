@@ -30,7 +30,7 @@ jobs:
 
       - run: |
           mkdir dist
-          mv target/aarch64-unknown-linux-musl/release/yspl dist/yspl-arm64
+          mv target/aarch64-unknown-linux-musl/release/ysp-live dist/ysp-live-arm64
       
       - name: Create Release
         uses: softprops/action-gh-release@v2

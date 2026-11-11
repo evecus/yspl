@@ -1,3 +1,7 @@
+//! 对应 Python 手写密码学段落（_aes256_key_schedule / aes_gcm_encrypt /
+//! aes_gcm_decrypt_b64 / rsa_oaep_sha256_encrypt / rsa_encrypt_device_id）。
+//! 语义完全一致，实现改用成熟 crate。
+
 pub mod tea;
 
 use aes_gcm::aead::{Aead, KeyInit};

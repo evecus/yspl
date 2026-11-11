@@ -1,3 +1,10 @@
+//! 对应 Python 的 HLS 文本处理与 1080p 备用流逻辑：
+//! `_rs_lines` / `rewrite_playlist_urls` / `proxy_playlist_ts_urls` /
+//! `inject_hls_discontinuity` / `fetch_playlist_http1` / `proxy_ts_token` /
+//! `decode_proxy_ts_url` / `parse_catchup_*` / `build_playlist` / `jce_fetch` /
+//! `jce_refresh` / `bk_refresh` / `refresh_once` / `refresh_loop` / `ensure_channel` /
+//! `coalesce_refresh` / `ApiFlowLimiter` / `/all.m3u` 生成 / engine 回退。
+
 use std::collections::HashMap;
 use std::future::Future;
 use std::sync::{Arc, OnceLock};
