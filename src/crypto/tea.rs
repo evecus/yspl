@@ -1,6 +1,3 @@
-//! 对应 Python `_tea_blk` / `_cksum` / `_tea_pkt` / `_lp` / `_ck_guard` / `_ckey`
-//! / `generate_app_random_str` / `compute_vdn_code`（腾讯 cKey 与 VDN 签名）。
-
 use rand::RngCore as _;
 use serde_json::{json, Value};
 

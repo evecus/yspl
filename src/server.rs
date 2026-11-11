@@ -1,7 +1,3 @@
-//! 对应 Python `class Handler(BaseHTTPRequestHandler)` 的 `_send` / `do_HEAD` / `do_GET`。
-//! 路由：/、/favicon.ico、/health、/all.m3u、/diag、/proxy.ts、/proxy、
-//! /engine_proxy、/<channel>.m3u8，全部 1:1 保留。
-
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::Arc;

@@ -1,7 +1,3 @@
-//! 对应 Python `class W` / `class R` / `_qua` / `_head` / `_wrap` / `_unwrap`
-//! / `jce_timeshift_url` / `_ckey` 调用方 / `bk_playurls` / `fetch_abs_playlist`。
-//! JCE(Tars) 的 TLV 编解码按 Python 版逐字节对齐，无第三方 crate 可用。
-
 use std::collections::HashMap;
 use std::io::{Read as _, Write as _};
 use std::sync::OnceLock;

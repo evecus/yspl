@@ -1,6 +1,3 @@
-use std::fmt;
-
-/// 对应 Python `YsptpError` / `DeadHostError`。
 #[derive(Debug, Clone)]
 pub enum YsptpError {
     Msg(String),

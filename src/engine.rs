@@ -1,7 +1,3 @@
-//! 对应 Python `start_companion_engine` / `stop_companion_engine` /
-//! `is_port_listening` / `atexit` / SIGTERM 处理。
-//! 按「全量 1:1」要求保留 Node.js 伴生引擎（ysp-engine.js 原样随镜像分发）。
-
 use std::net::{SocketAddr, TcpStream};
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};

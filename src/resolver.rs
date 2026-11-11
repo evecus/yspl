@@ -1,7 +1,3 @@
-//! 对应 Python `class Resolver` 的状态机部分：会话池、换台防抖、配额、冷却、
-//! 400 换设备、后台刷新队列、SWR、playlist 缓存、TS 回放头匹配。
-//! 设备协议的具体 HTTP 流程见 `protocol.rs`，HLS 文本处理见 `hls.rs`。
-
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;

@@ -1,5 +1,3 @@
-//! 全部从 ysp-live-v9.5.py 逐项搬过来的常量（值不变）。
-
 pub const VERSION: &str = "9.5.1";
 pub const AUTHOR_COMMUNITY: &str = "https://t.me/+rgxyQeDLtjcxM2U1";
 pub const AUTHOR_CHANNEL: &str = "https://t.me/tmxktg";

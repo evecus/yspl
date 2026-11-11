@@ -1,13 +1,13 @@
 [package]
-name = "ysp-live"
+name = "yspl"
 version = "0.1.0"
 edition = "2021"
-rust-version = "1.82"
-description = "央视频全频道直播代理（ysp-live v9.5.1 全量 1:1 Rust 重写）"
+rust-version = "1.99"
+description = "央视频全频道直播代理"
 license = "MIT"
 
 [[bin]]
-name = "ysp-live"
+name = "yspl"
 path = "src/main.rs"
 
 [dependencies]

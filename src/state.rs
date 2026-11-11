@@ -1,7 +1,3 @@
-//! 对应 Python 的全部可变状态：`ResolverState` / `AppSession` / `ChannelEntry` /
-//! `PlaylistCacheEntry` / `RefreshQueue` / `HttpQueue` / `TsSegmentCache` /
-//! `Channel` / `ChannelDirectory` / 高码率独占锁 / 全局 `resolver` 与 `active_backend_channels`。
-
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -507,7 +503,7 @@ impl HighLocks {
                 locks.insert(channel, (client_ip.to_string(), now));
                 true
             }
-            Some((owner, last_seen)) if now - last_seen >= self.timeout => {
+            Some((_owner, last_seen)) if now - last_seen >= self.timeout => {
                 crate::util::log(format!("[{channel}] 原高码率锁超时释放，新设备 {client_ip} 接管"), 0.0);
                 locks.insert(channel, (client_ip.to_string(), now));
                 true

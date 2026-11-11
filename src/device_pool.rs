@@ -1,6 +1,3 @@
-// @generated 由 gen_data.py 从 ysp-live-v9.5.py 机械抽取，请勿手工编辑。
-/// 随机 Android TV 设备身份模板池（与 Python DEVICE_PROFILE_POOL 逐项一致）。
-
 #[derive(Clone, Copy, Debug)]
 pub struct DeviceTemplate {
     pub source: &'static str,
