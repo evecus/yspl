@@ -11,14 +11,112 @@ use crate::util;
 #[derive(Clone, Debug)]
 struct Ipv4OnlyResolver;
 
+const FALLBACK_DNS: [&str; 3] = ["223.5.5.5:53", "119.29.29.29:53", "114.114.114.114:53"];
+
+fn build_dns_query(host: &str, id: u16) -> Option<Vec<u8>> {
+    let mut q = Vec::with_capacity(32 + host.len());
+    q.extend_from_slice(&id.to_be_bytes());
+    q.extend_from_slice(&[0x01, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]);
+    for label in host.trim_end_matches('.').split('.') {
+        if label.is_empty() || label.len() > 63 {
+            return None;
+        }
+        q.push(label.len() as u8);
+        q.extend_from_slice(label.as_bytes());
+    }
+    q.push(0);
+    q.extend_from_slice(&[0x00, 0x01, 0x00, 0x01]);
+    Some(q)
+}
+
+fn skip_dns_name(buf: &[u8], mut i: usize) -> Option<usize> {
+    loop {
+        let len = *buf.get(i)? as usize;
+        if len == 0 {
+            return Some(i + 1);
+        }
+        if len & 0xC0 == 0xC0 {
+            return Some(i + 2);
+        }
+        i += len + 1;
+    }
+}
+
+fn parse_dns_a(buf: &[u8], id: u16) -> Vec<SocketAddr> {
+    let mut out = Vec::new();
+    if buf.len() < 12 || u16::from_be_bytes([buf[0], buf[1]]) != id || buf[3] & 0x0F != 0 {
+        return out;
+    }
+    let qd = u16::from_be_bytes([buf[4], buf[5]]) as usize;
+    let an = u16::from_be_bytes([buf[6], buf[7]]) as usize;
+    let mut i = 12;
+    for _ in 0..qd {
+        match skip_dns_name(buf, i) {
+            Some(n) => i = n + 4,
+            None => return out,
+        }
+    }
+    for _ in 0..an {
+        let Some(n) = skip_dns_name(buf, i) else { return out };
+        if n + 10 > buf.len() {
+            return out;
+        }
+        let typ = u16::from_be_bytes([buf[n], buf[n + 1]]);
+        let rdlen = u16::from_be_bytes([buf[n + 8], buf[n + 9]]) as usize;
+        let data = n + 10;
+        if data + rdlen > buf.len() {
+            return out;
+        }
+        if typ == 1 && rdlen == 4 {
+            let ip = std::net::Ipv4Addr::new(buf[data], buf[data + 1], buf[data + 2], buf[data + 3]);
+            out.push(SocketAddr::new(ip.into(), 0));
+        }
+        i = data + rdlen;
+    }
+    out
+}
+
+async fn fallback_lookup(host: &str) -> Vec<SocketAddr> {
+    let id = (std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.subsec_nanos())
+        .unwrap_or(1)
+        & 0xFFFF) as u16;
+    let Some(query) = build_dns_query(host, id) else { return Vec::new() };
+    for server in FALLBACK_DNS {
+        let Ok(sock) = tokio::net::UdpSocket::bind("0.0.0.0:0").await else { continue };
+        if sock.connect(server).await.is_err() || sock.send(&query).await.is_err() {
+            continue;
+        }
+        let mut buf = [0u8; 1500];
+        if let Ok(Ok(n)) = tokio::time::timeout(Duration::from_secs(3), sock.recv(&mut buf)).await {
+            let addrs = parse_dns_a(&buf[..n], id);
+            if !addrs.is_empty() {
+                return addrs;
+            }
+        }
+    }
+    Vec::new()
+}
+
 impl reqwest::dns::Resolve for Ipv4OnlyResolver {
     fn resolve(&self, name: reqwest::dns::Name) -> reqwest::dns::Resolving {
         let host = name.as_str().to_string();
         Box::pin(async move {
-            let addrs: Vec<SocketAddr> = tokio::net::lookup_host((host.as_str(), 0))
-                .await?
-                .filter(|a| a.is_ipv4())
-                .collect();
+            let sys: std::result::Result<Vec<SocketAddr>, std::io::Error> = tokio::net::lookup_host((host.as_str(), 0))
+                .await
+                .map(|it| it.filter(|a| a.is_ipv4()).collect());
+            let addrs = match sys {
+                Ok(v) if !v.is_empty() => v,
+                Ok(_) => fallback_lookup(&host).await,
+                Err(e) => {
+                    let v = fallback_lookup(&host).await;
+                    if v.is_empty() {
+                        return Err(Box::new(e) as Box<dyn std::error::Error + Send + Sync>);
+                    }
+                    v
+                }
+            };
             Ok(Box::new(addrs.into_iter()) as reqwest::dns::Addrs)
         })
     }
@@ -212,4 +310,24 @@ pub async fn raw_get(
     let mut b = client.get(url).headers(to_header_map(headers));
     b = b.timeout(timeout);
     b.send().await
+}
+
+#[cfg(test)]
+mod dns_tests {
+    use super::*;
+
+    #[test]
+    fn query_and_parse() {
+        let q = build_dns_query("ytpaddr.cctv.cn", 0x1234).unwrap();
+        assert_eq!(&q[..2], &[0x12, 0x34]);
+        let mut resp = q.clone();
+        resp[2] = 0x81;
+        resp[3] = 0x80;
+        resp[7] = 1;
+        resp.extend_from_slice(&[0xC0, 0x0C, 0, 1, 0, 1, 0, 0, 0, 60, 0, 4, 203, 107, 52, 126]);
+        let a = parse_dns_a(&resp, 0x1234);
+        assert_eq!(a.len(), 1);
+        assert_eq!(a[0].ip().to_string(), "203.107.52.126");
+        assert!(parse_dns_a(&resp, 0x9999).is_empty());
+    }
 }
