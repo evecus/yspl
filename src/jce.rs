@@ -92,7 +92,7 @@ impl JceGate {
     pub async fn call<T, F, Fut>(
         &self,
         f: F,
-        active: Option<&dyn Fn() -> bool>,
+        active: Option<&(dyn Fn() -> bool + Sync)>,
         retry_after: Option<&str>,
     ) -> Result<T>
     where
@@ -648,7 +648,7 @@ pub async fn jce_timeshift_url_gated<F>(
     active: F,
 ) -> Result<String>
 where
-    F: Fn() -> bool,
+    F: Fn() -> bool + Sync,
 {
     let (c, p, s, st) = (client, pid.to_string(), sid.to_string(), stream.to_string());
     jce_gate()
@@ -799,7 +799,7 @@ pub async fn fetch_abs_playlist(client: &HttpClient, url: &str, depth: u8) -> Re
         let (host, ext) = match url::Url::parse(url) {
             Ok(parsed) => {
                 let h = parsed.host_str().unwrap_or("unknown").to_string();
-                let e = match parsed.path.rsplit_once('.') {
+                let e = match parsed.path().rsplit_once('.') {
                     Some((_, tail)) => tail.chars().take(8).collect(),
                     None => "noext".to_string(),
                 };

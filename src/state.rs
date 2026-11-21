@@ -525,7 +525,7 @@ impl HighLocks {
                 locks.insert(channel, (client_ip.to_string(), now));
                 true
             }
-            Some((owner, last_seen)) if now - last_seen >= self.timeout => {
+            Some((_owner, last_seen)) if now - last_seen >= self.timeout => {
                 crate::util::log(format!("[{channel}] 原高码率锁超时释放，新设备 {client_ip} 接管"), 0.0);
                 locks.insert(channel, (client_ip.to_string(), now));
                 true
