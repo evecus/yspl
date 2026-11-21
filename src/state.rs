@@ -431,6 +431,37 @@ pub struct Channel {
     pub last_built_time: f64,
     pub last_m3u8_source: String,
     pub thread_alive: bool,
+
+    // ===== 9.8 移植：JCE 低码率直播窗口状态 =====
+    /// refresh_once 的非阻塞重入锁（对应 Python 的 refresh_lock）。
+    pub refreshing: bool,
+    /// BK 上游限流冷却截止时间（unix 秒）。
+    pub bk_blocked_until: f64,
+    /// 已解析的 JCE 直播时移 URL 及其过期时间（unix 秒）。
+    pub jce_live_url: String,
+    pub jce_live_expiry: f64,
+    /// JCE 重锚代数，用于判定窗口是否需要重新对齐。
+    pub jce_anchor_generation: i64,
+    pub jce_accepted_generation: i64,
+    /// 已接受的窗口尾片段 (seq, stamp)；None 表示尚未建立。
+    pub jce_live_tail: Option<(i64, f64)>,
+    /// 已接受的片段表：seq -> (stamp, duration)。
+    pub jce_live_rows: HashMap<i64, (f64, f64)>,
+    /// 已接受的 target duration；0 表示尚未建立（对应 getattr 默认值）。
+    pub jce_target: i64,
+    /// 媒体序列号偏移量。
+    pub jce_sequence_offset: i64,
+    /// 缓存的 JCE 输出播放列表。
+    pub jce_live_playlist: String,
+    /// 窗口最后一个已完整片段的结束时间（unix 秒）。
+    pub jce_live_media_end: f64,
+    /// 是否抑制 PDT 标签（wall-clock 重叠歧义时）。
+    pub jce_suppress_pdt: bool,
+    /// 媒体播放列表 429 冷却截止时间（unix 秒）。
+    pub jce_media_blocked_until: f64,
+    /// 待提交的 target / offset（jce_fetch 与 jce_refresh 间传递）。
+    pub jce_pending_target: i64,
+    pub jce_pending_offset: i64,
 }
 
 impl Channel {
@@ -445,6 +476,14 @@ impl Channel {
             mode, last_pdt: String::new(), bk_urls: Vec::new(), bk_urls_time: 0.0,
             bk_playlist: String::new(), starting: false, last_built_playlist: String::new(),
             last_built_time: 0.0, last_m3u8_source: String::new(), thread_alive: false,
+            refreshing: false, bk_blocked_until: 0.0,
+            jce_live_url: String::new(), jce_live_expiry: 0.0,
+            jce_anchor_generation: 0, jce_accepted_generation: 0,
+            jce_live_tail: None, jce_live_rows: HashMap::new(),
+            jce_target: 0, jce_sequence_offset: 0,
+            jce_live_playlist: String::new(), jce_live_media_end: 0.0,
+            jce_suppress_pdt: false, jce_media_blocked_until: 0.0,
+            jce_pending_target: 0, jce_pending_offset: 0,
         }
     }
 }
@@ -486,7 +525,7 @@ impl HighLocks {
                 locks.insert(channel, (client_ip.to_string(), now));
                 true
             }
-            Some((owner, last_seen)) if now - last_seen >= self.timeout => {
+            Some((_owner, last_seen)) if now - last_seen >= self.timeout => {
                 crate::util::log(format!("[{channel}] 原高码率锁超时释放，新设备 {client_ip} 接管"), 0.0);
                 locks.insert(channel, (client_ip.to_string(), now));
                 true
