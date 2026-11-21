@@ -1,18 +1,148 @@
 use std::collections::HashMap;
+use std::future::Future;
 use std::io::{Read as _, Write as _};
 use std::sync::OnceLock;
 use std::time::Duration;
 
 use serde_json::Value;
+use tokio::sync::Mutex as AsyncMutex;
 
 use crate::constants::{
     APP_ID, BIZ_ID, BK_H264_B64, BK_LIVEINFO_URL, CHAN_ID, CK_APPVER, CK_PLATFORM, JACC_URL,
-    QMF_APP_ID, QMF_PLATFORM, VER_CODE_I32, VER_CODE_STR, VER_NAME,
+    JCE_MIN_REQUEST_INTERVAL, JCE_THROTTLE_MAX, JCE_THROTTLE_MIN, QMF_APP_ID, QMF_PLATFORM,
+    VER_CODE_I32, VER_CODE_STR, VER_NAME,
 };
 use crate::crypto::tea::ckey;
-use crate::error::{Result, YsptpError};
+use crate::error::{is_throttle_message, Result, YsptpError};
 use crate::http_client::{HttpClient, HttpResponse};
-use crate::util::{form_urlencode_value, url_host};
+use crate::util::{form_urlencode_value, log, now_f64, url_host};
+
+/// 9.8: JCE 请求门控——串行化 URL 解析调用，并在命中限流时共享退避冷却。
+/// 对应 Python 版 JceRequestGate。
+pub struct JceGate {
+    state: AsyncMutex<JceGateState>,
+}
+
+struct JceGateState {
+    next_request: f64,
+    blocked_until: f64,
+    penalty: f64,
+}
+
+impl Default for JceGate {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl JceGate {
+    pub fn new() -> Self {
+        Self {
+            state: AsyncMutex::new(JceGateState {
+                next_request: 0.0,
+                blocked_until: 0.0,
+                penalty: 0.0,
+            }),
+        }
+    }
+
+    /// 剩余限流冷却秒数（供 HTTP 503 Retry-After 使用）。
+    pub async fn remaining(&self) -> f64 {
+        let st = self.state.lock().await;
+        Self::remaining_locked(&st)
+    }
+
+    fn remaining_locked(st: &JceGateState) -> f64 {
+        (st.blocked_until - now_f64()).max(0.0)
+    }
+
+    fn parse_retry_after(header: Option<&str>) -> Option<f64> {
+        let raw = header?.trim();
+        if let Ok(secs) = raw.parse::<f64>() {
+            return Some(secs);
+        }
+        // HTTP 日期格式
+        if let Ok(dt) = chrono::DateTime::parse_from_rfc2822(raw) {
+            return Some((dt.timestamp_millis() as f64 - now_f64() * 1000.0) / 1000.0);
+        }
+        None
+    }
+
+    /// 进入限流冷却，返回携带剩余秒数的 RateLimited 错误。
+    fn throttle_locked(st: &mut JceGateState, retry_after: Option<&str>) -> YsptpError {
+        st.penalty = JCE_THROTTLE_MAX.min(JCE_THROTTLE_MIN.max(st.penalty * 2.0));
+        let mut delay = st.penalty;
+        if let Some(secs) = Self::parse_retry_after(retry_after) {
+            if secs.is_finite() {
+                delay = delay.max(secs);
+            }
+        }
+        if !delay.is_finite() {
+            delay = st.penalty;
+        }
+        st.blocked_until = st.blocked_until.max(now_f64() + delay);
+        YsptpError::rate_limited(format!(
+            "JCE 请求已限流，暂停 {:.0} 秒后再试",
+            Self::remaining_locked(st)
+        ))
+    }
+
+    /// 串行执行一次 JCE 解析调用。
+    /// active: 频道是否仍活跃，返回 false 时取消排队请求（低码率空闲）。
+    pub async fn call<T, F, Fut>(
+        &self,
+        f: F,
+        active: Option<&dyn Fn() -> bool>,
+        retry_after: Option<&str>,
+    ) -> Result<T>
+    where
+        F: FnOnce() -> Fut,
+        Fut: Future<Output = Result<T>>,
+    {
+        let mut st = self.state.lock().await;
+        let rem = Self::remaining_locked(&st);
+        if rem > 0.0 {
+            return Err(YsptpError::rate_limited(format!(
+                "JCE 限流冷却中，剩余 {:.0} 秒",
+                rem
+            )));
+        }
+        let delay = st.next_request - now_f64();
+        if delay > 0.0 {
+            tokio::time::sleep(Duration::from_secs_f64(delay)).await;
+        }
+        if let Some(a) = active {
+            if !a() {
+                return Err(YsptpError::new("低码率频道已空闲，取消排队请求"));
+            }
+        }
+        st.next_request = now_f64() + JCE_MIN_REQUEST_INTERVAL;
+        let result = f().await;
+        match result {
+            Err(ref e) if e.is_rate_limited() || e.http_status_code() == Some(429) || is_throttle_message(e.message()) => {
+                Err(Self::throttle_locked(&mut st, retry_after))
+            }
+            Ok(v) => {
+                st.penalty = 0.0;
+                Ok(v)
+            }
+            Err(e) => Err(e),
+        }
+    }
+
+    /// 由媒体播放列表 429 触发的冷却（media cooldown 是 per-channel，但这里提供
+    /// 一个共享入口，方便 server 层统一读取剩余冷却）。
+    pub async fn block_for(&self, secs: f64) {
+        let mut st = self.state.lock().await;
+        st.blocked_until = st.blocked_until.max(now_f64() + secs.max(0.0));
+    }
+}
+
+static JCE_GATE: OnceLock<JceGate> = OnceLock::new();
+
+pub fn jce_gate() -> &'static JceGate {
+    JCE_GATE.get_or_init(JceGate::new)
+}
 
 pub struct W {
     pub b: Vec<u8>,
@@ -445,7 +575,8 @@ pub fn unwrap(data: &[u8]) -> Result<Option<Vec<u8>>> {
     Ok(m.get(&1).map(|v| v.as_bytes()).filter(|b| !b.is_empty()))
 }
 
-pub async fn jce_timeshift_url(
+/// JCE 时移 URL 解析的实际实现（不带门控）。
+async fn jce_timeshift_url_inner(
     client: &HttpClient,
     pid: &str,
     sid: &str,
@@ -473,6 +604,15 @@ pub async fn jce_timeshift_url(
             Duration::from_secs(15),
         )
         .await?;
+    if resp.status == 429 {
+        return Err(YsptpError::rate_limited("JCE HTTP 429"));
+    }
+    if !(200..300).contains(&resp.status) {
+        return Err(YsptpError::http_status(
+            resp.status,
+            format!("JCE HTTP {}", resp.status),
+        ));
+    }
     let resp_body = unwrap(&resp.body)?
         .ok_or_else(|| YsptpError::new("bad response"))?;
     let m = R::new(&resp_body).structure()?;
@@ -482,6 +622,9 @@ pub async fn jce_timeshift_url(
             .get(&1)
             .map(|v| v.as_str())
             .unwrap_or_else(|| format!("errCode={err}"));
+        if is_throttle_message(&msg) {
+            return Err(YsptpError::rate_limited(msg));
+        }
         return Err(YsptpError::new(msg));
     }
     let url = m.get(&2).map(|v| v.as_str()).unwrap_or_default();
@@ -492,6 +635,41 @@ pub async fn jce_timeshift_url(
         return Err(YsptpError::dead_host("dead cdn host"));
     }
     Ok(url)
+}
+
+/// 9.8: 带门控的 JCE 时移 URL 解析。active 返回 false 时取消排队请求。
+pub async fn jce_timeshift_url_gated<F>(
+    client: &HttpClient,
+    pid: &str,
+    sid: &str,
+    start: i64,
+    end: i64,
+    stream: &str,
+    active: F,
+) -> Result<String>
+where
+    F: Fn() -> bool,
+{
+    let (c, p, s, st) = (client, pid.to_string(), sid.to_string(), stream.to_string());
+    jce_gate()
+        .call(
+            || jce_timeshift_url_inner(c, &p, &s, start, end, &st),
+            Some(&active),
+            None,
+        )
+        .await
+}
+
+/// 保持旧签名（无 active 判定）的门控包装，供时移等同步调用点使用。
+pub async fn jce_timeshift_url(
+    client: &HttpClient,
+    pid: &str,
+    sid: &str,
+    start: i64,
+    end: i64,
+    stream: &str,
+) -> Result<String> {
+    jce_timeshift_url_gated(client, pid, sid, start, end, stream, || true).await
 }
 
 pub async fn bk_playurls(client: &HttpClient, channel_id: &str, live_pid: &str, defn: &str) -> Result<Vec<String>> {
@@ -616,6 +794,36 @@ pub async fn fetch_abs_playlist(client: &HttpClient, url: &str, depth: u8) -> Re
     let resp: HttpResponse = client
         .send_timeout(reqwest::Method::GET, url, &headers, None, Duration::from_secs(10))
         .await?;
+    if !(200..300).contains(&resp.status) {
+        // 9.8: 只记录非敏感元数据，绝不输出签名 URL 的 query string。
+        let (host, ext) = match url::Url::parse(url) {
+            Ok(parsed) => {
+                let h = parsed.host_str().unwrap_or("unknown").to_string();
+                let e = match parsed.path.rsplit_once('.') {
+                    Some((_, tail)) => tail.chars().take(8).collect(),
+                    None => "noext".to_string(),
+                };
+                (h, e)
+            }
+            Err(_) => ("unknown".to_string(), "unknown".to_string()),
+        };
+        let server = resp.header("Server").unwrap_or("-").chars().take(80).collect::<String>();
+        let ctype = resp.header("Content-Type").unwrap_or("-").chars().take(80).collect::<String>();
+        let via = resp.header("Via").unwrap_or("-").chars().take(100).collect::<String>();
+        let xcache = resp.header("X-Cache").unwrap_or("-").chars().take(100).collect::<String>();
+        let cf_ray = resp.header("CF-Ray").unwrap_or("-").chars().take(80).collect::<String>();
+        log(
+            format!(
+                "[BK-HTTP] status={} host={} depth={} ext={} server={} type={} via={} x-cache={} cf-ray={}",
+                resp.status, host, depth, ext, server, ctype, via, xcache, cf_ray
+            ),
+            5.0,
+        );
+        return Err(YsptpError::http_status(
+            resp.status,
+            format!("HTTP {}", resp.status),
+        ));
+    }
     let text = resp.text();
     let final_url = resp.final_url.clone();
     let lines: Vec<&str> = text.lines().collect();

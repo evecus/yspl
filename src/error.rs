@@ -5,6 +5,12 @@ pub enum YsptpError {
     Msg(String),
 
     DeadHost(String),
+
+    /// 上游限流错误（JCE 429 / 限流关键词），由 JceGate 统一退避。
+    RateLimited(String),
+
+    /// 带 HTTP 状态码的上游错误，供 BK 过期/限流判定使用。
+    HttpStatus(u16, String),
 }
 
 impl YsptpError {
@@ -16,15 +22,51 @@ impl YsptpError {
         YsptpError::DeadHost(s.into())
     }
 
+    pub fn rate_limited<S: Into<String>>(s: S) -> Self {
+        YsptpError::RateLimited(s.into())
+    }
+
+    pub fn http_status<S: Into<String>>(status: u16, s: S) -> Self {
+        YsptpError::HttpStatus(status, s.into())
+    }
+
     pub fn message(&self) -> &str {
         match self {
-            YsptpError::Msg(s) | YsptpError::DeadHost(s) => s,
+            YsptpError::Msg(s)
+            | YsptpError::DeadHost(s)
+            | YsptpError::RateLimited(s)
+            | YsptpError::HttpStatus(_, s) => s,
         }
     }
 
     pub fn is_dead_host(&self) -> bool {
         matches!(self, YsptpError::DeadHost(_))
     }
+
+    pub fn is_rate_limited(&self) -> bool {
+        matches!(self, YsptpError::RateLimited(_))
+    }
+
+    pub fn http_status_code(&self) -> Option<u16> {
+        match self {
+            YsptpError::HttpStatus(code, _) => Some(*code),
+            _ => None,
+        }
+    }
+}
+
+/// 判断错误文本是否表示上游限流（JCE 门控退避判定）。
+pub fn is_throttle_message(text: &str) -> bool {
+    let lower = text.to_lowercase();
+    [
+        "操作过于频繁",
+        "请求过于频繁",
+        "too many requests",
+        "rate limit",
+        "http 429",
+    ]
+    .iter()
+    .any(|k| lower.contains(k))
 }
 
 impl fmt::Display for YsptpError {

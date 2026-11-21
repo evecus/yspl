@@ -1,4 +1,4 @@
-pub const VERSION: &str = "0.1.0";
+pub const VERSION: &str = "0.1.0+9.8-TMXK";
 
 pub const AK: &str = "9f5c54c4ed0e50109b800f7e28fec205";
 pub const RSA_PUBLIC_KEY_B64: &str = "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAkKeLy4ywWLSnBkwRyqYgF3HMIj05V5uuh5HjyEsZOWnu1NHu3jPQv3sr32wwQNYv5qapsNXmNgLUDHtgHZxqPQAYXltjSRc0qhcD286t62wOIHId8zXS3s1Jy4rgU4qjQWzI9rp/1sE0pMsmwTaJa4zuJ5iz8VwF8Av5oJ1k+HxY+/HLnjNlW1hmWLpuDYmkZYuAoTHa1VGeHQh9FEKI8ZcL3GTQphShUoC+Kg3P1hGUVTtCYapmzPS5lkAdwebuzwvTCfGiTErYZCnPBUSeV7BVlgjtLYIi29KvF0a8FHsJMfe/UdHcyW/RihsIYOtDQcRRpFGXyPXbVrzFJse24QIDAQAB";
@@ -37,8 +37,17 @@ pub const UA: &str = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKi
 
 pub const REFRESH_INTERVAL: f64 = 10.0;
 pub const IDLE_TIMEOUT: f64 = 120.0;
+// 9.8: 低码率(JCE/BK)播放列表使用更短的空闲超时与新鲜度上限，
+// 避免旧缓冲在换台后长时间停留，同时也用于 JCE 限流门控的 active 判定。
+pub const LOW_STREAM_IDLE_TIMEOUT: f64 = 20.0;
+pub const LOW_PLAYLIST_MAX_AGE: f64 = 30.0;
 pub const LINK_IDLE_TIMEOUT: f64 = 15.0;
 pub const WINDOW: i64 = 300;
+// 9.8: JCE 请求门控——同一时刻只允许一个解析请求，最小间隔 2 秒；
+// 命中限流后退避 60~900 秒（指数增长）。
+pub const JCE_MIN_REQUEST_INTERVAL: f64 = 2.0;
+pub const JCE_THROTTLE_MIN: f64 = 60.0;
+pub const JCE_THROTTLE_MAX: f64 = 900.0;
 pub const MAX_SEGS: usize = 120;
 pub const BK_URL_TTL: f64 = 300.0;
 pub const DEFAULT_SERVER_PORT: u16 = 8767;

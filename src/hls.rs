@@ -3,7 +3,7 @@ use std::future::Future;
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
-use chrono::{DateTime, FixedOffset, NaiveDateTime, TimeZone};
+use chrono::{DateTime, FixedOffset, NaiveDateTime, TimeZone, Utc};
 use parking_lot::Mutex;
 use url::Url;
 
@@ -369,8 +369,6 @@ pub fn parse_catchup_query(query_str: &str) -> Option<(i64, i64)> {
     Some((start, end))
 }
 
-type Segment = (f64, String, String);
-
 pub fn seg_key(url: &str, pdt: &str) -> String {
     if !pdt.is_empty() {
         return format!("pdt:{pdt}");
@@ -388,43 +386,297 @@ pub fn defn_label(defn: &str) -> String {
     }
 }
 
-async fn jce_fetch(ch: &SharedChannel) -> Result<Vec<Segment>> {
-    ch_app_flow_limiter().await;
-    let (pid, sid, defn) = {
+/// 9.8: 严格解析 JCE 媒体 HLS 窗口，保留单调 PDT 与显式 wall-clock 间隙。
+/// 返回 (已选片段列表 [(seq, stamp, duration, url)], target duration)。
+fn parse_jce_live_window(text: &str, base_url: &str, now: f64) -> Result<(Vec<(i64, f64, f64, String)>, i64)> {
+    let lines: Vec<&str> = text.lines().map(|x| x.trim()).filter(|x| !x.is_empty()).collect();
+    if lines.is_empty() || lines[0] != "#EXTM3U" {
+        return Err(YsptpError::new("JCE invalid media playlist"));
+    }
+    let allowed = [
+        "#EXTM3U",
+        "#EXT-X-VERSION:",
+        "#EXT-X-TARGETDURATION:",
+        "#EXT-X-MEDIA-SEQUENCE:",
+        "#EXT-X-PROGRAM-DATE-TIME:",
+        "#EXTINF:",
+        "#EXT-X-ENDLIST",
+        "#EXT-X-PLAYLIST-TYPE:",
+    ];
+    let (mut seq, mut duration, mut stamp): (i64, Option<f64>, Option<f64>) = (0, None, None);
+    let mut rows: Vec<(i64, f64, f64, String)> = Vec::new();
+    let mut target: Option<i64> = None;
+    let (mut previous_end, mut previous_start, mut previous_duration): (Option<f64>, Option<f64>, Option<f64>) =
+        (None, None, None);
+    for line in &lines[1..] {
+        if line.starts_with("#EXT") && !allowed.iter().any(|t| *line == *t || line.starts_with(t)) {
+            return Err(YsptpError::new("JCE unsupported HLS feature"));
+        }
+        if let Some(v) = line.strip_prefix("#EXT-X-TARGETDURATION:") {
+            target = Some(v.parse::<i64>().map_err(|_| YsptpError::new("JCE invalid target duration"))?);
+            if !(1..=30).contains(&target.unwrap_or(0)) {
+                return Err(YsptpError::new("JCE invalid target duration"));
+            }
+        } else if let Some(v) = line.strip_prefix("#EXT-X-MEDIA-SEQUENCE:") {
+            if !rows.is_empty() {
+                return Err(YsptpError::new("JCE late media sequence"));
+            }
+            seq = v.parse::<i64>().map_err(|_| YsptpError::new("JCE invalid media sequence"))?;
+            if seq < 0 {
+                return Err(YsptpError::new("JCE invalid media sequence"));
+            }
+        } else if let Some(v) = line.strip_prefix("#EXT-X-PROGRAM-DATE-TIME:") {
+            let iso = if v.ends_with('Z') { format!("{}+00:00", &v[..v.len() - 1]) } else { v.to_string() };
+            let dt = DateTime::parse_from_rfc3339(&iso)
+                .map_err(|_| YsptpError::new("JCE invalid PDT"))?;
+            stamp = Some(dt.timestamp_micros() as f64 / 1_000_000.0);
+        } else if let Some(v) = line.strip_prefix("#EXTINF:") {
+            if duration.is_some() {
+                return Err(YsptpError::new("JCE missing segment URI"));
+            }
+            let d = v.split(',').next().unwrap_or("").parse::<f64>().unwrap_or(f64::NAN);
+            if !d.is_finite() || !(0.0..=30.0).contains(&d) {
+                return Err(YsptpError::new("JCE invalid segment duration"));
+            }
+            duration = Some(d);
+        } else if !line.starts_with('#') {
+            let (dur, pdt) = match (duration, stamp) {
+                (Some(d), Some(s)) => (d, s),
+                _ => return Err(YsptpError::new("JCE missing duration or PDT")),
+            };
+            if let Some(ps) = previous_start {
+                if pdt <= ps {
+                    return Err(YsptpError::new("JCE non-increasing PDT"));
+                }
+            }
+            if let Some(pe) = previous_end {
+                if pdt + dur <= pe {
+                    return Err(YsptpError::new("JCE non-increasing segment end"));
+                }
+                let gap = pdt - pe;
+                let overlap_limit = 0.75f64.min(0.15 * previous_duration.unwrap_or(dur).min(dur));
+                if gap < -overlap_limit - 1e-7 {
+                    return Err(YsptpError::new(format!(
+                        "JCE PDT overlap={:.3}s prev={:.3}+{:.3} curr={:.3}+{:.3} limit={:.3}s",
+                        -gap,
+                        previous_start.unwrap_or(0.0),
+                        previous_duration.unwrap_or(0.0),
+                        pdt,
+                        dur,
+                        overlap_limit
+                    )));
+                }
+            }
+            previous_start = Some(pdt);
+            previous_duration = Some(dur);
+            let url = Url::parse(base_url)
+                .ok()
+                .and_then(|b| b.join(line).ok())
+                .map(|u| u.to_string())
+                .unwrap_or_else(|| line.to_string());
+            let scheme = Url::parse(&url).map(|u| u.scheme().to_string()).unwrap_or_default();
+            if scheme != "http" && scheme != "https" {
+                return Err(YsptpError::new("JCE invalid media URI"));
+            }
+            rows.push((seq + rows.len() as i64, pdt, dur, url));
+            previous_end = Some(pdt + dur);
+            stamp = Some(pdt + dur);
+            duration = None;
+        }
+    }
+    let target = target.ok_or_else(|| YsptpError::new("JCE missing/invalid target duration"))?;
+    if rows.iter().any(|r| (r.2 + 0.5).floor() as i64 > target) {
+        return Err(YsptpError::new("JCE missing/invalid target duration"));
+    }
+    if duration.is_some() || rows.is_empty() {
+        return Err(YsptpError::new("JCE incomplete media playlist"));
+    }
+    let mut completed: Vec<(i64, f64, f64, String)> =
+        rows.into_iter().filter(|r| r.1 + r.2 <= now).collect();
+    let mut cut = 0usize;
+    for i in 1..completed.len() {
+        if completed[i].1 - (completed[i - 1].1 + completed[i - 1].2) > 30.0 {
+            cut = i;
+        }
+    }
+    if cut > 0 {
+        completed = completed[cut..].to_vec();
+    }
+    if completed.len() < 4 || now - (completed.last().unwrap().1 + completed.last().unwrap().2) > 30.0 {
+        return Err(YsptpError::new("JCE no recent completed media"));
+    }
+    let end_idx = completed.len().saturating_sub(1);
+    let start_idx = end_idx.saturating_sub(6);
+    let selected = completed[start_idx..end_idx].to_vec();
+    Ok((selected, target))
+}
+
+/// 9.8: 记录频道访问；空闲超时后重置 HLS 连续性状态，但保留已解析 URL/expiry 与限流状态。
+pub fn jce_note_access(ch: &SharedChannel, now: f64) {
+    let mut reset = false;
+    {
         let c = ch.lock();
-        (c.pid.clone(), c.sid.clone(), c.defn.clone())
+        if now - c.last_access >= LOW_STREAM_IDLE_TIMEOUT {
+            reset = true;
+        }
+    }
+    if reset {
+        let mut c = ch.lock();
+        // 双重检查，避免并发重复重置
+        if now - c.last_access >= LOW_STREAM_IDLE_TIMEOUT {
+            c.jce_live_tail = None;
+            c.jce_live_rows.clear();
+            c.jce_target = 0;
+            c.jce_accepted_generation = 0;
+            c.jce_sequence_offset = 0;
+            c.jce_live_playlist.clear();
+            c.jce_live_media_end = 0.0;
+            c.jce_suppress_pdt = false;
+            c.last_built_playlist.clear();
+            c.last_built_time = 0.0;
+            c.last_ok = 0.0;
+        }
+    }
+    ch.lock().last_access = now;
+}
+
+/// 9.8: 重写后的 JCE 拉取。解析一次 URL 并缓存到 end-60s，
+/// 严格校验窗口 PDT / 重叠 / sequence offset，命中媒体 429 时进入 per-channel 冷却。
+async fn jce_fetch(ch: &SharedChannel) -> Result<Vec<(i64, f64, f64, String)>> {
+    let now = now_f64();
+    if now < ch.lock().jce_media_blocked_until {
+        return Err(YsptpError::rate_limited("JCE media cooldown"));
+    }
+
+    // 需要重新解析 URL 时：解析一次，缓存到 end-60s。
+    let need_resolve = {
+        let c = ch.lock();
+        c.jce_live_url.is_empty() || now >= c.jce_live_expiry
     };
-    let now = now_f64() as i64;
-    let m3u8_url = crate::jce::jce_timeshift_url(client(), &pid, &sid, now - WINDOW, now, &defn).await?;
+    if need_resolve {
+        let (pid, sid, defn) = {
+            let c = ch.lock();
+            (c.pid.clone(), c.sid.clone(), c.defn.clone())
+        };
+        let end = now as i64 + 900;
+        let url = crate::jce::jce_timeshift_url_gated(
+            client(),
+            &pid,
+            &sid,
+            now as i64 - 120,
+            end,
+            &defn,
+            || now_f64() - ch.lock().last_access < LOW_STREAM_IDLE_TIMEOUT,
+        )
+        .await?;
+        let mut c = ch.lock();
+        c.jce_live_url = url;
+        c.jce_live_expiry = (end - 60) as f64;
+        c.jce_anchor_generation += 1;
+    }
+
+    let m3u8_url = ch.lock().jce_live_url.clone();
     let headers = [("User-Agent", UA)];
     let resp = client()
         .send_timeout(reqwest::Method::GET, &m3u8_url, &headers, None, Duration::from_secs(20))
         .await?;
-    let text = resp.text();
-    let base = Url::parse(&m3u8_url).ok();
-    let mut segs = Vec::new();
-    let mut dur = 6.0f64;
-    let mut pdt = String::new();
-    for line in text.lines() {
-        let line = line.trim();
-        if let Some(rest) = line.strip_prefix("#EXTINF:") {
-            dur = rest.split(',').next().unwrap_or("").parse::<f64>().unwrap_or(6.0);
-        } else if let Some(v) = line.strip_prefix("#EXT-X-PROGRAM-DATE-TIME:") {
-            pdt = v.to_string();
-        } else if !line.is_empty() && !line.starts_with('#') {
-            let url = base
-                .as_ref()
-                .and_then(|b| b.join(line).ok())
-                .map(|u| u.to_string())
-                .unwrap_or_else(|| line.to_string());
-            segs.push((dur, pdt.clone(), url));
-            pdt.clear();
+    if resp.status == 429 {
+        let header = resp.header("Retry-After");
+        let mut delay = 60.0f64;
+        if let Some(h) = header {
+            if let Ok(v) = h.parse::<f64>() {
+                delay = delay.max(v);
+            } else if let Ok(dt) = chrono::DateTime::parse_from_rfc2822(h) {
+                delay = delay.max((dt.timestamp_millis() as f64 - now_f64() * 1000.0) / 1000.0);
+            }
+        }
+        if !delay.is_finite() {
+            delay = 60.0;
+        }
+        ch.lock().jce_media_blocked_until = now_f64() + delay;
+        return Err(YsptpError::rate_limited("JCE media cooldown"));
+    }
+    if !(200..300).contains(&resp.status) {
+        return Err(YsptpError::http_status(resp.status, format!("JCE media HTTP {}", resp.status)));
+    }
+    let raw = resp.body;
+    if raw.len() > 2 * 1024 * 1024 {
+        return Err(YsptpError::new("JCE playlist too large"));
+    }
+    let text = String::from_utf8(raw).map_err(|_| YsptpError::new("JCE playlist invalid utf-8"))?;
+    let media_base = resp.final_url.clone();
+    let (rows, target) = parse_jce_live_window(&text, &media_base, now_f64())?;
+
+    // target duration 变化需要重新打开播放列表。
+    {
+        let c = ch.lock();
+        if c.jce_target != 0 && c.jce_target != target {
+            return Err(YsptpError::new("JCE target duration changed; reopen required"));
         }
     }
-    if segs.is_empty() {
-        return Err(YsptpError::new("empty playlist"));
+
+    let mut offset;
+    let (accepted_gen, anchor_gen, old_rows, seq_offset) = {
+        let c = ch.lock();
+        (
+            c.jce_accepted_generation,
+            c.jce_anchor_generation,
+            c.jce_live_rows.clone(),
+            c.jce_sequence_offset,
+        )
+    };
+    offset = seq_offset;
+    if accepted_gen != anchor_gen {
+        if !old_rows.is_empty() {
+            let mut offsets: Vec<i64> = Vec::new();
+            for (seq, stamp, dur, _) in &rows {
+                for (oldseq, (oldstamp, olddur)) in &old_rows {
+                    if (stamp - oldstamp).abs() < 0.05 && (dur - olddur).abs() < 0.05 {
+                        offsets.push(oldseq - seq);
+                    }
+                }
+            }
+            offsets.sort_unstable();
+            offsets.dedup();
+            if offsets.len() != 1 {
+                return Err(YsptpError::new("JCE new window lacks unambiguous PDT overlap; reopen required"));
+            }
+            offset = offsets[0];
+        } else {
+            offset = 0;
+        }
     }
-    Ok(segs)
+    let rows: Vec<(i64, f64, f64, String)> = rows
+        .into_iter()
+        .map(|(seq, stamp, dur, url)| (seq + offset, stamp, dur, url))
+        .collect();
+
+    let previous = ch.lock().jce_live_tail;
+    if let Some(tail) = rows.last() {
+        if let Some(prev) = previous {
+            if tail.0 < prev.0 || tail.1 < prev.1 {
+                return Err(YsptpError::new("JCE live window regressed"));
+            }
+            if (tail.0 == prev.0) != ((tail.1 - prev.1).abs() < 0.05) {
+                return Err(YsptpError::new("JCE media sequence/PDT mismatch"));
+            }
+            for (seq, stamp, dur, _) in &rows {
+                if let Some((oldstamp, olddur)) = old_rows.get(seq) {
+                    if (stamp - oldstamp).abs() > 0.05 || (dur - olddur).abs() > 0.05 {
+                        return Err(YsptpError::new("JCE overlapping media changed"));
+                    }
+                }
+            }
+        }
+    }
+
+    {
+        let mut c = ch.lock();
+        c.jce_pending_target = target;
+        c.jce_pending_offset = offset;
+    }
+    ch_app_flow_limiter().await;
+    Ok(rows)
 }
 
 async fn ch_app_flow_limiter() {
@@ -434,68 +686,48 @@ async fn ch_app_flow_limiter() {
 }
 
 async fn jce_refresh(ch: &SharedChannel) -> Result<bool> {
-    let segs = match jce_fetch(ch).await {
-        Ok(v) => v,
-        Err(e) if e.is_dead_host() => return Err(e),
-        Err(e) => return Err(e),
+    let rows = jce_fetch(ch).await?;
+    let (target, pending_offset) = {
+        let c = ch.lock();
+        (c.jce_pending_target, c.jce_pending_offset)
     };
-    let is_init;
-    let mut added = 0i64;
-    let info;
+
+    // wall-clock 重叠无法用出向 PDT 无歧义表达：观测到重叠后，
+    // 本次播放会话（含重锚）永久省略 OPTIONAL 的 PDT 标签。
+    let overlap = rows.windows(2).any(|w| w[1].1 < w[0].1 + w[0].2 - 1e-6);
+    let suppress_pdt = ch.lock().jce_suppress_pdt || overlap;
+
+    let mut out = vec![
+        "#EXTM3U".to_string(),
+        "#EXT-X-VERSION:3".to_string(),
+        format!("#EXT-X-TARGETDURATION:{target}"),
+        format!("#EXT-X-MEDIA-SEQUENCE:{}", rows[0].0),
+    ];
+    for (_, stamp, dur, url) in &rows {
+        if !suppress_pdt {
+            // Python: datetime.fromtimestamp(stamp, utc).isoformat()
+            let ms = (stamp * 1000.0) as i64;
+            let dt = DateTime::<Utc>::from_timestamp_millis(ms)
+                .ok_or_else(|| YsptpError::new("JCE invalid timestamp"))?;
+            out.push(format!("#EXT-X-PROGRAM-DATE-TIME:{}", dt.to_rfc3339()));
+        }
+        out.push(format!("#EXTINF:{dur:.6},"));
+        out.push(url.clone());
+    }
+
     {
         let mut c = ch.lock();
-        is_init = c.order.is_empty();
-        if is_init {
-            for (_, pdt, url) in &segs {
-                let k = seg_key(url, pdt);
-                if !c.seen_keys.contains(&k) {
-                    if c.seen_keys.len() >= MAX_SEGS * 2 { c.seen_keys.pop_front(); }
-                    c.seen_keys.push_back(k);
-                }
-            }
-            let start = segs.len().saturating_sub(25);
-            for (dur, pdt, url) in &segs[start..] {
-                let key = seg_key(url, pdt);
-                c.seq += 1;
-                let seq = c.seq;
-                c.segments.insert(key.clone(), (seq, *dur, pdt.clone(), url.clone()));
-                c.order.push_back(key);
-                added += 1;
-                if !pdt.is_empty() { c.last_pdt = pdt.clone(); }
-            }
-        } else {
-            for (dur, pdt, url) in &segs {
-                if !pdt.is_empty() && !c.last_pdt.is_empty() && pdt.as_str() <= c.last_pdt.as_str() {
-                    continue;
-                }
-                let key = seg_key(url, pdt);
-                if let Some(seg) = c.segments.get_mut(&key) {
-                    seg.3 = url.clone();
-                    continue;
-                }
-                if c.seen_keys.contains(&key) {
-                    continue;
-                }
-                if c.seen_keys.len() >= MAX_SEGS * 2 { c.seen_keys.pop_front(); }
-                c.seen_keys.push_back(key.clone());
-                c.seq += 1;
-                let seq = c.seq;
-                c.segments.insert(key.clone(), (seq, *dur, pdt.clone(), url.clone()));
-                c.order.push_back(key);
-                if !pdt.is_empty() { c.last_pdt = pdt.clone(); }
-                added += 1;
-            }
+        c.jce_suppress_pdt = suppress_pdt;
+        c.jce_live_playlist = format!("{}\n", out.join("\n"));
+        c.jce_target = target;
+        c.jce_sequence_offset = pending_offset;
+        c.jce_accepted_generation = c.jce_anchor_generation;
+        if let Some(tail) = rows.last() {
+            c.jce_live_tail = Some((tail.0, tail.1));
+            c.jce_live_media_end = tail.1 + tail.2;
         }
-        while c.order.len() > MAX_SEGS {
-            if let Some(old) = c.order.pop_front() {
-                c.segments.remove(&old);
-            }
-        }
+        c.jce_live_rows = rows.iter().map(|r| (r.0, (r.1, r.2))).collect();
         c.last_error.clear();
-        info = (c.slug.clone(), defn_label(&c.defn), c.segments.len());
-    }
-    if is_init && added > 0 {
-        log(format!("[{}] {} 备用流缓冲就绪 ({} 片)", info.0, info.1, info.2), 0.0);
     }
     Ok(true)
 }
@@ -503,6 +735,14 @@ async fn jce_refresh(ch: &SharedChannel) -> Result<bool> {
 async fn bk_refresh(ch: &SharedChannel) -> Result<bool> {
     ch_app_flow_limiter().await;
     let now = now_f64();
+    // 9.8: BK 上游限流冷却，冷却期内直接拒绝，避免放大请求。
+    let blocked_until = ch.lock().bk_blocked_until;
+    if now < blocked_until {
+        return Err(YsptpError::new(format!(
+            "BK rate limited; channel cooldown {:.0}s",
+            blocked_until - now
+        )));
+    }
     let (sid, pid, defn, urls, urls_time) = {
         let c = ch.lock();
         (c.sid.clone(), c.pid.clone(), c.defn.clone(), c.bk_urls.clone(), c.bk_urls_time)
@@ -518,6 +758,7 @@ async fn bk_refresh(ch: &SharedChannel) -> Result<bool> {
         log(format!("[{}] bkliveinfo 备用通道就绪 ({} 地址)", ch.lock().slug, urls.len()), 60.0);
     }
     let mut last_err = String::new();
+    let mut expired = false;
     for attempt in 0..2 {
         for u in &urls {
             match crate::jce::fetch_abs_playlist(client(), u, 0).await {
@@ -525,48 +766,133 @@ async fn bk_refresh(ch: &SharedChannel) -> Result<bool> {
                     let mut c = ch.lock();
                     c.bk_playlist = pl;
                     c.last_error.clear();
+                    c.bk_blocked_until = 0.0;
                     return Ok(true);
                 }
                 Ok(_) => continue,
                 Err(e) => {
                     let msg = e.message();
-                    last_err = if msg.contains("HTTP ") {
-                        format!("HTTPError: {}", msg)
-                    } else {
-                        msg.to_string()
-                    };
+                    match e.http_status_code() {
+                        Some(429) => {
+                            // 解析 Retry-After 退避（这里用保守 60s，签名 URL 不暴露）。
+                            let delay = 60.0f64;
+                            ch.lock().bk_blocked_until = now_f64() + delay;
+                            return Err(YsptpError::new(format!(
+                                "BK HTTP 429 rate limited; cooldown {:.0}s",
+                                delay
+                            )));
+                        }
+                        Some(401) | Some(403) | Some(404) => {
+                            expired = true;
+                            last_err = format!("HTTPError: HTTP {}", e.http_status_code().unwrap());
+                        }
+                        Some(code) => {
+                            last_err = format!("HTTPError: HTTP {code}");
+                        }
+                        None => {
+                            last_err = msg.to_string();
+                        }
+                    }
                 }
             }
         }
-        if attempt == 0 {
-            if let Ok(new_urls) = crate::jce::bk_playurls(client(), &sid, &pid, &defn).await {
-                urls = new_urls;
-                ch.lock().bk_urls_time = now_f64();
-                log(format!("[{}] {} 地址已过期，已重新拉取", ch.lock().slug, defn_label(&defn)), 10.0);
+        // 9.8: 只有明确的过期/拒绝（401/403/404）才重新解析 BK URL；
+        // 瞬时 5xx/网络错误只对现有 URL 做一次有界重试。
+        if attempt == 0 && expired {
+            match crate::jce::bk_playurls(client(), &sid, &pid, &defn).await {
+                Ok(new_urls) => {
+                    urls = new_urls;
+                    ch.lock().bk_urls_time = now_f64();
+                    expired = false;
+                    log(format!("[{}] {} BK 地址过期/拒绝，已重新获取", ch.lock().slug, defn), 10.0);
+                }
+                Err(e) => {
+                    last_err = e.message().to_string();
+                }
             }
         }
     }
-    {
+    if expired {
         let mut c = ch.lock();
         c.bk_urls.clear();
         c.bk_urls_time = 0.0;
     }
-    Err(YsptpError::new(if last_err.is_empty() { "bk playlist failed".to_string() } else { last_err[..last_err.len().min(120)].to_string() }))
+    Err(YsptpError::new(if last_err.is_empty() { "bk playlist failed".to_string() } else { last_err.chars().take(120).collect() }))
 }
 
+/// 9.8: refresh_once 带非阻塞重入锁；重复触发直接返回 false。
 pub async fn refresh_once(ch: &SharedChannel) -> bool {
+    {
+        let mut c = ch.lock();
+        if c.refreshing {
+            return false;
+        }
+        c.refreshing = true;
+    }
+    let result = refresh_once_inner(ch).await;
+    ch.lock().refreshing = false;
+    result
+}
+
+async fn refresh_once_inner(ch: &SharedChannel) -> bool {
     let mode = { ch.lock().mode.clone() };
     let result = if mode == "bk" {
         bk_refresh(ch).await
     } else {
         match jce_refresh(ch).await {
             Err(e) if e.is_dead_host() => {
-                {
-                    let mut c = ch.lock();
-                    c.mode = "bk".to_string();
-                }
+                let previous = mode.clone();
+                ch.lock().mode = "bk".to_string();
                 log(format!("[{}] JCE 域名受限，自动切换 bkliveinfo 备用通道", ch.lock().slug), 10.0);
-                bk_refresh(ch).await
+                match bk_refresh(ch).await {
+                    Ok(true) => Ok(true),
+                    Ok(false) => {
+                        ch.lock().mode = previous;
+                        Err(YsptpError::new("JCE 域名受限; BK fallback unavailable"))
+                    }
+                    Err(be) => {
+                        ch.lock().mode = previous;
+                        Err(YsptpError::new(format!("JCE 域名受限; BK fallback failed: {}", be.message())))
+                    }
+                }
+            }
+            // 9.8: JCE 全局限流时切到独立的 BK 源，避免低码率播放列表空置。
+            Err(e) if e.is_rate_limited() || e.http_status_code() == Some(429) => {
+                let previous = mode.clone();
+                ch.lock().mode = "bk".to_string();
+                match bk_refresh(ch).await {
+                    Ok(true) => {
+                        log(format!("[{}] JCE 限流，已切换 BK 备用源", ch.lock().slug), 10.0);
+                        Ok(true)
+                    }
+                    Ok(false) => {
+                        ch.lock().mode = previous;
+                        Err(YsptpError::new("JCE rate limited; BK fallback unavailable"))
+                    }
+                    Err(be) => {
+                        ch.lock().mode = previous;
+                        Err(YsptpError::new(format!("JCE rate limited; BK fallback failed: {}", be.message())))
+                    }
+                }
+            }
+            // 9.8: PDT 时间轴重叠是唯一可通过切 BK 恢复的完整性错误。
+            Err(e) if e.message().contains("JCE PDT overlap=") => {
+                let previous = mode.clone();
+                ch.lock().mode = "bk".to_string();
+                match bk_refresh(ch).await {
+                    Ok(true) => {
+                        log(format!("[{}] JCE PDT 时间轴重叠，已切换 BK 备用源", ch.lock().slug), 10.0);
+                        Ok(true)
+                    }
+                    Ok(false) => {
+                        ch.lock().mode = previous;
+                        Err(YsptpError::new("JCE PDT overlap; BK fallback unavailable"))
+                    }
+                    Err(be) => {
+                        ch.lock().mode = previous;
+                        Err(YsptpError::new(format!("JCE PDT overlap; BK fallback failed: {}", be.message())))
+                    }
+                }
             }
             other => other,
         }
@@ -582,7 +908,7 @@ pub async fn refresh_once(ch: &SharedChannel) -> bool {
                 let mut c = ch.lock();
                 c.last_error = e.chars().take(120).collect();
             }
-            log(format!("[{}] {} 刷新异常: {}", ch.lock().slug, defn_label(&ch.lock().defn), ch.lock().last_error), 15.0);
+            log(format!("[{}] {} 刷新异常: {}", ch.lock().slug, ch.lock().defn, ch.lock().last_error), 15.0);
             false
         }
     }
@@ -590,6 +916,20 @@ pub async fn refresh_once(ch: &SharedChannel) -> bool {
 
 pub fn build_playlist(ch: &SharedChannel, holdback: bool) -> Option<String> {
     let mut c = ch.lock();
+    let now = now_f64();
+    // 9.8: 播放列表新鲜度上限，避免旧缓冲被反复投送。
+    if now - c.last_ok > LOW_PLAYLIST_MAX_AGE {
+        return None;
+    }
+    // 9.8: JCE 模式直接返回已严格校验的窗口播放列表。
+    if c.mode == "jce" && !c.jce_live_playlist.is_empty() {
+        if now - c.jce_live_media_end > 30.0 {
+            return None;
+        }
+        c.last_built_playlist = c.jce_live_playlist.clone();
+        c.last_built_time = now;
+        return Some(c.jce_live_playlist.clone());
+    }
     if c.mode == "bk" {
         if !c.bk_playlist.is_empty() {
             c.last_built_playlist = c.bk_playlist.clone();
@@ -663,14 +1003,17 @@ pub async fn ensure_channel(app: &Arc<AppState>, ch: &SharedChannel) {
             (false, false, true, c.slug.clone())
         } else {
             let thread_dead = !c.thread_alive;
-            let cache_stale = now - c.last_ok > IDLE_TIMEOUT
-                || (c.segments.is_empty() && c.bk_playlist.is_empty());
-            if cache_stale {
+            // 9.8: 低码率新鲜度上限替代旧的 120s IDLE_TIMEOUT。
+            let cache_stale = now - c.last_ok > LOW_PLAYLIST_MAX_AGE
+                || (c.segments.is_empty() && c.bk_playlist.is_empty() && c.jce_live_playlist.is_empty());
+            // 9.8: 仅在线程已停止时才真正清空缓冲，避免运行中误清。
+            if cache_stale && thread_dead {
                 c.segments.clear();
                 c.order.clear();
                 c.seen_keys.clear();
                 c.last_pdt.clear();
                 c.bk_playlist.clear();
+                c.jce_live_playlist.clear();
             }
             if cache_stale || thread_dead {
                 c.starting = true;
@@ -713,7 +1056,7 @@ async fn refresh_loop(_app: &Arc<AppState>, ch: &SharedChannel) {
         build_playlist(ch, true);
         tokio::time::sleep(Duration::from_secs_f64(REFRESH_INTERVAL)).await;
     }
-    while now_f64() - ch.lock().last_access < IDLE_TIMEOUT {
+    while now_f64() - ch.lock().last_access < LOW_STREAM_IDLE_TIMEOUT {
         let ok = refresh_once(ch).await;
         if ok {
             build_playlist(ch, true);
@@ -727,6 +1070,13 @@ async fn refresh_loop(_app: &Arc<AppState>, ch: &SharedChannel) {
 
 pub fn trigger_background_refresh(app: &Arc<AppState>, ch: &SharedChannel) {
     let slug = { ch.lock().slug.clone() };
+    // 9.8: 已在启动中或后台线程仍存活时不重复触发。
+    {
+        let c = ch.lock();
+        if c.starting || c.thread_alive {
+            return;
+        }
+    }
     if app.inflight_events.lock().contains_key(&slug) {
         return;
     }
