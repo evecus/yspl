@@ -180,7 +180,7 @@ fn diag_response(app: &AppState, head_only: bool) -> Response {
     let now = now_f64();
     let mut info = vec![
         "====================================================".to_string(),
-        format!("yspl v{VERSION} 诊断报告 (运行时间: {}s)", (now - app.server_start_time) as i64),
+        format!("yspl v0.1.0 诊断报告 (运行时间: {}s)", (now - app.server_start_time) as i64),
         "====================================================".to_string(),
     ];
     let engine_status = if app.ready() { "就绪" } else { "未就绪(1080p自动回退)" };
@@ -444,18 +444,7 @@ async fn channel_playlist(
     if app.active_backend.contains(&canonical) && app.ready() && high_lock_allowed {
         if let Some(r) = &resolver {
             if !r.is_channel_in_cooldown(&canonical) {
-                // 9.8: 仅当低码率播放列表已就绪时才允许换台防抖，
-                // 否则防抖返回 None 会导致本次请求无内容可播。
-                let now_ts = now_f64();
-                let ready_low = {
-                    let c = ch.lock();
-                    !c.last_built_playlist.is_empty()
-                        && now_ts - c.last_built_time < 15.0
-                        && now_ts - c.last_ok <= LOW_PLAYLIST_MAX_AGE
-                        && (c.mode != "jce" || now_ts - c.jce_live_media_end <= 30.0)
-                        && c.last_built_playlist.contains("#EXTM3U")
-                };
-                match r.fetch_channel_playlist(&canonical, host, proto, ready_low).await {
+                match r.fetch_channel_playlist(&canonical, host, proto).await {
                     Ok(Some(pl)) if pl.contains("#EXTM3U") => {
                         let prev_src = {
                             let mut c = ch.lock();
@@ -481,25 +470,12 @@ async fn channel_playlist(
     }
 
     let now_ts = now_f64();
-    // 9.8: JCE 模式使用 jce_note_access（空闲超时后重置连续性），其余沿用 last_access。
-    {
-        let mode = ch.lock().mode.clone();
-        if mode == "jce" {
-            hls::jce_note_access(&ch, now_ts);
-        } else {
-            ch.lock().last_access = now_ts;
-        }
-    }
-    let (cached_pl, cached_age, cache_fresh) = {
+    ch.lock().last_access = now_ts;
+    let (cached_pl, cached_age) = {
         let c = ch.lock();
-        (
-            c.last_built_playlist.clone(),
-            now_ts - c.last_built_time,
-            now_ts - c.last_ok <= LOW_PLAYLIST_MAX_AGE
-                && (c.mode != "jce" || now_ts - c.jce_live_media_end <= 30.0),
-        )
+        (c.last_built_playlist.clone(), now_ts - c.last_built_time)
     };
-    if !cached_pl.is_empty() && cached_age < 15.0 && cache_fresh && cached_pl.contains("#EXTM3U") {
+    if !cached_pl.is_empty() && cached_age < 15.0 && cached_pl.contains("#EXTM3U") {
         let prev_src = {
             let mut c = ch.lock();
             let prev = c.last_m3u8_source.clone();
@@ -513,29 +489,6 @@ async fn channel_playlist(
             hls::trigger_background_refresh(app, &ch);
         }
         return resp;
-    }
-
-    // 9.8: JCE 限流冷却期间直接返回 503 + Retry-After，避免无意义等待。
-    {
-        let mode = ch.lock().mode.clone();
-        if mode == "jce" {
-            let gate_remaining = crate::jce::jce_gate().remaining().await;
-            let media_remaining = {
-                let c = ch.lock();
-                (c.jce_media_blocked_until - now_f64()).max(0.0)
-            };
-            let retry = gate_remaining.max(media_remaining);
-            if retry > 0.0 {
-                let secs = retry.ceil().max(1.0) as i64;
-                return send(
-                    503,
-                    "低码率接口限流冷却中，请稍后重试\n".as_bytes().to_vec(),
-                    "text/plain; charset=utf-8",
-                    head_only,
-                    &[("Retry-After".into(), secs.to_string())],
-                );
-            }
-        }
     }
 
     hls::ensure_channel(app, &ch).await;

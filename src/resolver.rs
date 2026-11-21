@@ -515,11 +515,7 @@ impl Resolver {
             }
             Err(err) => {
                 let err_text = err.message().to_string();
-                // 9.8: live/v1/01 的 HTTP 400 是频道/API 特定的，轮换共享设备身份会
-                // 作废其他所有频道且无法修复被拒请求，因此此处不再触发轮换。
-                let live01_bad_request = err_text.to_lowercase().contains("live/v1/01 http 400");
                 if err_text.contains("HTTP 400")
-                    && !live01_bad_request
                     && self.rotate_device_on_400(&format!("{}:{}", channel, &err_text[..err_text.len().min(60)]))
                 {
                     if let Ok(entry) = crate::protocol::refresh_channel_controlled(self, channel).await {
@@ -742,27 +738,17 @@ impl Resolver {
         Ok((body, content_type, miss_probe))
     }
 
-    /// 9.8: allow_zap_debounce 由调用方根据低码率是否已就绪决定——
-    /// 只有低码率就绪时才允许防抖返回 None，避免无内容可播。
-    pub async fn fetch_channel_playlist(
-        &self,
-        channel: &str,
-        host_header: &str,
-        proto: &str,
-        allow_zap_debounce: bool,
-    ) -> Result<Option<String>> {
+    pub async fn fetch_channel_playlist(&self, channel: &str, host_header: &str, proto: &str) -> Result<Option<String>> {
         {
             let mut st = self.state.lock();
             st.channel_last_access.insert(channel.to_string(), now_f64());
         }
 
         let r = self.app.resolver.read().clone();
-        if allow_zap_debounce {
-            if let Some(r) = r {
-                if r.zap_debounced(channel) {
-                    log(format!("[{channel}] 换台防抖: 先出 1080p, 停留后自动升码率"), 10.0);
-                    return Ok(None);
-                }
+        if let Some(r) = r {
+            if r.zap_debounced(channel) {
+                log(format!("[{channel}] 换台防抖: 先出 1080p, 停留后自动升码率"), 10.0);
+                return Ok(None);
             }
         }
         let host = if host_header.trim().is_empty() {

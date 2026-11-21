@@ -62,7 +62,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let c_yangshi = app.directory.count_cctv();
     let c_weishi = app.directory.count_weishi();
     log("====================================================================", 0.0);
-    log(format!("yspl v{} 启动成功: {count} 个独立频道 (央视 {c_yangshi} 路, 卫视 {c_weishi} 路)", yspl::constants::VERSION), 0.0);
+    log(format!("yspl v0.1.0 启动成功: {count} 个独立频道 (央视 {c_yangshi} 路, 卫视 {c_weishi} 路)"), 0.0);
     log(format!("全频道订阅:   http://localhost:{}/all.m3u", cli.port), 0.0);
     log(format!("系统健康度:   http://localhost:{}/health", cli.port), 0.0);
     log(format!("实时诊断日志: http://localhost:{}/diag", cli.port), 0.0);
